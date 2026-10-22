@@ -1,0 +1,135 @@
+/* 主题适配：跟随多维表格浅色/深色模式 */
+:root {
+  --semi-color-primary: rgb(20, 86, 240);
+}
+
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Tahoma,
+    "PingFang SC", "Microsoft Yahei", Arial, "Hiragino Sans GB", sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
+body {
+  background: transparent;
+}
+
+.app-container {
+  padding: 12px;
+  min-height: 100%;
+  box-sizing: border-box;
+}
+
+.module-tabs {
+  margin-bottom: 16px;
+}
+
+.block-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 8px 0;
+}
+
+.hint-text {
+  font-size: 12px;
+  color: var(--semi-color-text-2);
+  line-height: 1.6;
+}
+
+.row-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.row-item .label {
+  width: 90px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--semi-color-text-1);
+  text-align: right;
+}
+
+.row-item .control {
+  flex: 1;
+  min-width: 0;
+}
+
+.mapping-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.mapping-row .excel-col {
+  width: 120px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mapping-row .arrow {
+  flex-shrink: 0;
+  color: var(--semi-color-text-2);
+}
+
+.result-box {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--semi-color-fill-0);
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+.preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+
+.preview-table th,
+.preview-table td {
+  border: 1px solid var(--semi-color-border);
+  padding: 4px 8px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-table th {
+  background: var(--semi-color-fill-1);
+  position: sticky;
+  top: 0;
+}
+
+.fixed-field-card {
+  padding: 10px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: var(--semi-color-tertiary-light-default);
+}
+
+.empty-tip {
+  text-align: center;
+  color: var(--semi-color-text-2);
+  padding: 32px 0;
+  font-size: 13px;
+}
+
+.footer-bar {
+  position: sticky;
+  bottom: 0;
+  padding-top: 12px;
+  padding-bottom: 4px;
+  background: var(--semi-color-bg-0);
+}
