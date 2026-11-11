@@ -165,7 +165,12 @@ export default function App() {
               </TabPane>
             )}
             <TabPane tab="📝 固定值批量录入" itemKey="fixed">
-              <FixedValueInput table={ctx.table} tableName={ctx.tableName} fields={ctx.fields} />
+              <FixedValueInput
+                table={ctx.table}
+                tableName={ctx.tableName}
+                fields={ctx.visibleFields}
+                config={formConfig}
+              />
             </TabPane>
             <TabPane tab="🎯 记录筛选修改" itemKey="update">
               <RecordUpdater table={ctx.table} tableName={ctx.tableName} fields={ctx.fields} />

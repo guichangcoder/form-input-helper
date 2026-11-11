@@ -1,20 +1,46 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Progress, Select, Tag, Toast } from '@douyinfe/semi-ui';
 import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
-import { BATCH_SIZE, FIELD_TYPE_LABEL, WRITABLE_FIELD_TYPES } from '../constants';
+import { BATCH_SIZE, FIELD_TYPE_LABEL } from '../constants';
 import { convertCellValue } from '../utils/convert';
 import {
   collectUsersFromTable,
   getCurrentUserId,
   writeRecords,
 } from '../utils/sdk';
+import { isWritableField, type FormFieldConfig, type TableFormConfig } from '../utils/formConfig';
 import FieldEditor from './FieldEditor';
 import { describeError } from '../utils/errors';
 
 interface FixedValueInputProps {
   table: ITable | null;
   tableName: string;
+  /** 当前视图可见字段 */
   fields: IFieldMeta[];
+  /** 管理员表单配置（未配置时为 null，此时按字段默认口径展示） */
+  config: TableFormConfig | null;
+}
+
+/** 字段是否被锁定：字段类型不可填写，或管理员配置为只读（值由管理员固定） */
+function isLockedField(fc: FormFieldConfig | null, meta: IFieldMeta): boolean {
+  return !isWritableField(meta) || Boolean(fc && fc.readOnly);
+}
+
+/** 只读字段的展示文本 */
+function readonlyText(meta: IFieldMeta, raw: unknown): string {
+  if (raw === undefined || raw === null || raw === '') return '';
+  if (Array.isArray(raw)) {
+    return raw
+      .map((x) =>
+        x && typeof x === 'object'
+          ? (x as IOpenUser).name || (x as IOpenUser).email || (x as IOpenUser).id || ''
+          : String(x),
+      )
+      .filter(Boolean)
+      .join('、');
+  }
+  if (meta.type === 7) return raw ? '是' : '否';
+  return String(raw);
 }
 
 /** 固定值配置 */
@@ -33,16 +59,46 @@ interface EnteredRow {
   display: string;
 }
 
-export default function FixedValueInput({ table, tableName, fields }: FixedValueInputProps) {
-  const supportedFields = useMemo(
-    () => fields.filter((f) => WRITABLE_FIELD_TYPES.includes(f.type as number)),
-    [fields],
-  );
+export default function FixedValueInput({ table, tableName, fields, config }: FixedValueInputProps) {
   const fieldById = useMemo(() => {
     const m = new Map<string, IFieldMeta>();
     fields.forEach((f) => m.set(f.id, f));
     return m;
   }, [fields]);
+
+  /** 应用管理员配置后的字段清单：仅保留配置为「显示」的字段，顺序按配置顺序 */
+  const configuredFields = useMemo<Array<{ meta: IFieldMeta; fc: FormFieldConfig | null }>>(() => {
+    if (!config) return fields.map((f) => ({ meta: f, fc: null }));
+    return config.fields
+      .map((fc) => ({ fc, meta: fieldById.get(fc.fieldId) }))
+      .filter((x): x is { fc: FormFieldConfig; meta: IFieldMeta } =>
+        Boolean(x.fc.visible && x.meta),
+      );
+  }, [config, fields, fieldById]);
+
+  /** 管理员锁定的字段：值由管理员配置固定，用户不可改（写入时自动带上） */
+  const lockedFields = useMemo(
+    () => configuredFields.filter((x) => isLockedField(x.fc, x.meta)),
+    [configuredFields],
+  );
+
+  /** 用户可操作的字段（可填写且未被管理员锁定） */
+  const supportedFields = useMemo(
+    () =>
+      configuredFields.filter((x) => !isLockedField(x.fc, x.meta)).map((x) => x.meta),
+    [configuredFields],
+  );
+
+  /** 管理员配置为必填的字段 ID */
+  const requiredIds = useMemo(
+    () =>
+      new Set(
+        configuredFields
+          .filter((x) => x.fc?.required && !isLockedField(x.fc, x.meta))
+          .map((x) => x.meta.id),
+      ),
+    [configuredFields],
+  );
 
   // 人员库：本表已出现过的人员 + 当前登录用户
   const [users, setUsers] = useState<IOpenUser[]>([]);
@@ -107,6 +163,22 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
     [supportedFields, fixedFields],
   );
 
+  // 管理员修改配置后，丢弃已隐藏/已被锁定字段上残留的草稿与固定值设置
+  useEffect(() => {
+    const allowed = new Set(supportedFields.map((f) => f.id));
+    setFixedFields((arr) => {
+      const next = arr.filter((x) => allowed.has(x.fieldId));
+      return next.length === arr.length ? arr : next;
+    });
+    setDraft((d) => {
+      const next: Record<string, unknown> = {};
+      Object.keys(d).forEach((k) => {
+        if (allowed.has(k)) next[k] = d[k];
+      });
+      return next;
+    });
+  }, [supportedFields]);
+
   /** 添加一个固定值字段 */
   const addFixedField = (fieldId: string) => {
     if (!fieldId || fixedFields.some((x) => x.fieldId === fieldId)) return;
@@ -139,12 +211,25 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
       }
     }
 
+    // 管理员锁定的字段（只读固定值）：自动为每条记录带上
+    for (const { meta, fc } of lockedFields) {
+      if (!isWritableField(meta)) continue;
+      const raw = fc?.fixedValue;
+      if (raw === undefined || raw === null || raw === '') continue;
+      const res = convertCellValue(raw, meta);
+      if (!res.ok) {
+        issues.push({ index: -1, message: `管理员固定字段「${meta.name}」：${res.error}` });
+      } else if (!res.skip) {
+        fixedConverted[meta.id] = res.value;
+      }
+    }
+
     rows.forEach((row, idx) => {
       records.push({ ...fixedConverted, ...row.values });
       void idx;
     });
     return { records, issues };
-  }, [fixedFields, rows, fieldById]);
+  }, [fixedFields, rows, fieldById, lockedFields]);
 
   /** 校验当前草稿行并加入列表 */
   const addRow = () => {
@@ -156,8 +241,13 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
     const errs: string[] = [];
     for (const f of editableFields) {
       const raw = draft[f.id];
-      // 空值允许跳过
-      if (raw === undefined || raw === null || raw === '') continue;
+      const isEmpty =
+        raw === undefined || raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0);
+      if (isEmpty) {
+        // 管理员在「表单配置」中设为必填的字段，录入时必须填写
+        if (requiredIds.has(f.id)) errs.push(`${f.name}：管理员已设为必填项`);
+        continue;
+      }
       const res = convertCellValue(raw, f);
       if (!res.ok) {
         errs.push(`${f.name}：${res.error}`);
@@ -216,6 +306,7 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
       new Set([
         ...fixedFields.map((f) => f.fieldId),
         ...editableFields.map((f) => f.id),
+        ...lockedFields.filter((x) => isWritableField(x.meta)).map((x) => x.meta.id),
       ]),
     );
 
@@ -281,6 +372,9 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
         </Button>
       </div>
       <div className="hint-text" style={{ marginBottom: 8 }}>
+        字段的显示/隐藏、必填、只读均跟随管理员在「表单配置」中的设置：不可见字段不会出现在此处，
+        管理员设为只读的字段会以固定值自动写入。
+        <br />
         为固定字段填写一个值后，每条录入记录都会自动带上该值；支持多个固定字段。
         <br />
         人员字段：从本表已出现的人员中选择（含当前登录用户），也可按 open_id 手动添加。
@@ -309,6 +403,20 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
         );
       })}
 
+      {lockedFields.map(({ meta, fc }) => (
+        <div key={meta.id} className="fixed-field-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Tag color="blue">{meta.name}</Tag>
+            <Tag size="small" color="grey">{isWritableField(meta) ? '只读' : '不可填写'}</Tag>
+            <span className="hint-text" style={{ flex: 1, textAlign: 'right' }}>
+              {isWritableField(meta)
+                ? readonlyText(meta, fc?.fixedValue) || '（未设置固定值）'
+                : '由多维表格自动生成'}
+            </span>
+          </div>
+        </div>
+      ))}
+
       {availableFixedOptions.length > 0 && (
         <Select
           optionList={availableFixedOptions}
@@ -323,13 +431,22 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
 
       <div className="block-title" style={{ marginTop: 16 }}>2. 录入记录（填写其余字段）</div>
       {editableFields.length === 0 ? (
-        <div className="empty-tip">所有字段已设为固定值，无法录入其他内容</div>
+        <div className="empty-tip">
+          没有可录入的字段。
+          <br />
+          <span className="hint-text">
+            可能是全部字段已被设为固定值或只读，也可能是管理员在「表单配置」中隐藏了字段。
+          </span>
+        </div>
       ) : (
         <>
           {editableFields.map((f) => (
             <div key={f.id} className="row-item">
               <div className="label" title={f.name}>
                 {f.name}
+                {requiredIds.has(f.id) && (
+                  <span style={{ color: 'var(--semi-color-danger)' }}> *</span>
+                )}
               </div>
               <div className="control">{renderEditor(f, draft[f.id], (v) => setDraft((d) => ({ ...d, [f.id]: v })))}</div>
             </div>
