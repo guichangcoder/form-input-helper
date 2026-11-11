@@ -11,6 +11,7 @@ import {
   writeRecords,
 } from '../utils/sdk';
 import FieldEditor from './FieldEditor';
+import { describeError } from '../utils/errors';
 
 interface FixedValueInputProps {
   table: ITable | null;
@@ -59,7 +60,7 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
       setCurrentUserId(uid);
     } catch (e) {
       console.error('读取人员字段失败', e);
-      Toast.error('读取人员字段失败，请刷新重试');
+      Toast.error(describeError(e, '读取人员字段失败，请刷新重试'));
     } finally {
       setScanningUsers(false);
     }
@@ -219,9 +220,10 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
         ...editableFields.map((f) => f.id),
       ]),
     );
-    const selectFieldIds = fieldIds.filter(
-      (fid) => (fieldById.get(fid)!.type as number) === 3 || (fieldById.get(fid)!.type as number) === 4,
-    );
+    const selectFieldIds = fieldIds.filter((fid) => {
+      const t = fieldById.get(fid)?.type;
+      return t === 3 || t === 4;
+    });
 
     setImporting(true);
     setProgress({ done: 0, total: records.length });
@@ -242,7 +244,7 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
         setDraft({});
       }
     } catch (err) {
-      Toast.error(`写入失败：${(err as Error).message}`);
+      Toast.error(describeError(err, `写入失败：${(err as Error).message || err}`));
     } finally {
       setImporting(false);
     }

@@ -13,6 +13,7 @@ import {
   type MatchOperator,
 } from '../utils/match';
 import FieldEditor from './FieldEditor';
+import { describeError } from '../utils/errors';
 
 interface RecordUpdaterProps {
   table: ITable | null;
@@ -74,7 +75,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       setCurrentUserId(uid);
     } catch (e) {
       console.error('读取人员字段失败', e);
-      Toast.error('读取人员字段失败，请刷新重试');
+      Toast.error(describeError(e, '读取人员字段失败，请刷新重试'));
     } finally {
       setScanningUsers(false);
     }
@@ -133,14 +134,23 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     setResult(null);
     setRowDrafts({});
     try {
-      const conditions = conds
-        .filter((c) => c.rawValue !== '' && c.rawValue != null)
-        .map((c) => ({
+      const conditions: Array<{
+        fieldId: string;
+        fieldMeta: IFieldMeta;
+        operator: MatchOperator;
+        rawValue: unknown;
+      }> = [];
+      conds.forEach((c) => {
+        if (c.rawValue === '' || c.rawValue == null) return;
+        const fieldMeta = fieldById.get(c.fieldId);
+        if (!fieldMeta) return; // 字段缺失/无权限：跳过该条件
+        conditions.push({
           fieldId: c.fieldId,
-          fieldMeta: fieldById.get(c.fieldId)!,
+          fieldMeta,
           operator: c.operator,
           rawValue: c.rawValue,
-        }));
+        });
+      });
       if (!conditions.length) {
         Toast.warning('筛选条件值不能为空');
         setQuerying(false);
@@ -166,7 +176,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       setTotal(totalCount);
       Toast.success(`匹配到 ${hits.length} 条记录（已扫描 ${Math.min(scannedCount, MAX_SCAN)} / ${totalCount} 条）`);
     } catch (e) {
-      Toast.error(`查询失败：${(e as Error).message}`);
+      Toast.error(describeError(e, `查询失败：${(e as Error).message}`));
     } finally {
       setQuerying(false);
     }
@@ -224,17 +234,20 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
 
   /** 收集单选/多选字段将出现的新选项并创建 */
   const ensureAllSelectOptions = async () => {
+    if (!table) return;
     const selectIds = updateFieldIds.filter((fid) => {
-      const t = fieldById.get(fid)!.type as number;
+      const t = fieldById.get(fid)?.type;
       return t === 3 || t === 4;
     });
     for (const fid of selectIds) {
-      const field = await table!.getField(fid);
+      const meta = fieldById.get(fid);
+      if (!meta) continue; // 字段缺失/无权限：跳过
+      const field = await table.getField(fid);
       const values = new Set<string>();
       if (mode === 'bulk') {
         const d = bulkUpdates[fid];
         if (d && !d.clear) {
-          const v = convertCellValue(d.rawValue, fieldById.get(fid)!).value;
+          const v = convertCellValue(d.rawValue, meta).value;
           if (Array.isArray(v)) (v as string[]).forEach((x) => values.add(x));
           else if (v != null) values.add(String(v));
         }
@@ -242,7 +255,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
         Object.values(rowDrafts).forEach((rec) => {
           const d = rec[fid];
           if (!d || d.clear) return;
-          const v = convertCellValue(d.rawValue, fieldById.get(fid)!).value;
+          const v = convertCellValue(d.rawValue, meta).value;
           if (Array.isArray(v)) (v as string[]).forEach((x) => values.add(x));
           else if (v != null) values.add(String(v));
         });
@@ -367,7 +380,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       setResult({ success, errors: all });
       Toast.success(`更新完成：成功 ${success} 条${all.length ? `，失败 ${all.length} 条` : ''}`);
     } catch (e) {
-      Toast.error(`更新失败：${(e as Error).message}`);
+      Toast.error(describeError(e, `更新失败：${(e as Error).message}`));
     } finally {
       setUpdating(false);
     }

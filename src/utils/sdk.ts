@@ -24,12 +24,21 @@ export interface TableContext {
 /** 获取当前激活的数据表及字段信息 */
 export async function getTableContext(): Promise<TableContext> {
   const table = await bitable.base.getActiveTable();
+  if (!table) {
+    throw new Error('未能获取当前数据表，请停留在某个数据表视图后重试');
+  }
   const meta = await table.getMeta();
-  const fields = await table.getFieldMetaList();
+  const fields = (await table.getFieldMetaList()) ?? [];
   const supportedFields = fields.filter((f) =>
     IMPORTABLE_FIELD_TYPES.includes(f.type as number),
   );
-  return { table, tableName: meta.name, tableId: meta.id, fields, supportedFields };
+  return {
+    table,
+    tableName: meta?.name ?? '',
+    tableId: meta?.id ?? '',
+    fields,
+    supportedFields,
+  };
 }
 
 /** 判断字段类型是否可导入（Excel） */

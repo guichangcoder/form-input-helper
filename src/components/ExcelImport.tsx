@@ -12,6 +12,7 @@ import {
 } from '../utils/sdk';
 import { FIELD_TYPE_LABEL } from '../constants';
 import PreviewTable from './PreviewTable';
+import { describeError } from '../utils/errors';
 
 const SKIP = '__skip__';
 
@@ -169,7 +170,8 @@ export default function ExcelImport({ table, tableId, tableName, fields }: Excel
     // 预览前 N 行（映射字段）
     const mappedFields = Object.entries(mapping)
       .filter(([, fid]) => fid !== SKIP)
-      .map(([header, fid]) => ({ header, meta: fieldById.get(fid)! }));
+      .map(([header, fid]) => ({ header, meta: fieldById.get(fid) }))
+      .filter((m): m is { header: string; meta: IFieldMeta } => Boolean(m.meta));
     const headers = mappedFields.map((m) => m.meta.name);
     const rows = records.slice(0, PREVIEW_ROWS).map((rec) =>
       mappedFields.map(({ header, meta }) => {
@@ -215,9 +217,10 @@ export default function ExcelImport({ table, tableId, tableName, fields }: Excel
     const fieldIds = Array.from(
       new Set(Object.values(mapping).filter((v) => v !== SKIP && fieldById.has(v))),
     );
-    const selectFields = fieldIds.filter(
-      (fid) => (fieldById.get(fid)!.type as number) === 3 || (fieldById.get(fid)!.type as number) === 4,
-    );
+    const selectFields = fieldIds.filter((fid) => {
+      const t = fieldById.get(fid)?.type;
+      return t === 3 || t === 4;
+    });
 
     setImporting(true);
     setProgress({ done: 0, total: nonEmpty.length });
@@ -241,7 +244,7 @@ export default function ExcelImport({ table, tableId, tableName, fields }: Excel
       setResult({ success: res.success, errors: errIssues });
       Toast.success(`导入完成：成功 ${res.success} 条${errIssues.length ? `，失败 ${errIssues.length} 条` : ''}`);
     } catch (err) {
-      Toast.error(`导入失败：${(err as Error).message}`);
+      Toast.error(describeError(err, `导入失败：${(err as Error).message}`));
     } finally {
       setImporting(false);
     }
