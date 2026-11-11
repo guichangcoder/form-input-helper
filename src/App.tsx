@@ -1,11 +1,20 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { Spin, Tabs } from '@douyinfe/semi-ui';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Spin, Tabs, Tag } from '@douyinfe/semi-ui';
 import { bitable, type IFieldMeta, type ITable } from '@lark-base-open/js-sdk';
 import ExcelImport from './components/ExcelImport';
 import FixedValueInput from './components/FixedValueInput';
+import FormConfigPanel from './components/FormConfigPanel';
+import FormFiller from './components/FormFiller';
 import RecordUpdater from './components/RecordUpdater';
 import { getTableContext } from './utils/sdk';
 import { describeError } from './utils/errors';
+import {
+  buildDefaultConfig,
+  isBaseManager,
+  loadFormConfig,
+  mergeConfigWithFields,
+  type TableFormConfig,
+} from './utils/formConfig';
 
 const { TabPane } = Tabs;
 
@@ -26,6 +35,10 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   /** 读取上下文失败时的可读原因（权限不足 / 数据表缺失等） */
   const [errorMsg, setErrorMsg] = useState('');
+  /** 当前用户是否为该多维表格的管理员（可管理权限） */
+  const [isManager, setIsManager] = useState(false);
+  /** 当前数据表的表单配置（未配置为 null） */
+  const [formConfig, setFormConfig] = useState<TableFormConfig | null>(null);
   const tableIdRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -39,6 +52,11 @@ export default function App() {
       tableIdRef.current = tableId;
       setErrorMsg('');
       setCtx({ table, tableName, tableId, fields });
+
+      // 管理权限 + 该表的表单配置（配置按数据表维度存储，表内用户共享）
+      const [manager, saved] = await Promise.all([isBaseManager(), loadFormConfig(tableId)]);
+      setIsManager(manager);
+      setFormConfig(saved ? mergeConfigWithFields(saved, fields) : null);
     } catch (e) {
       console.error('获取表信息失败', e);
       setErrorMsg(describeError(e, '未能获取当前数据表'));
@@ -71,10 +89,23 @@ export default function App() {
     };
   }, []);
 
+  // 管理员配置面板始终有可编辑的配置对象（未配置时使用默认值，保存后才生效）
+  const adminConfig = useMemo(
+    () => formConfig ?? buildDefaultConfig(ctx.fields),
+    [formConfig, ctx.fields],
+  );
+
   return (
     <div className="app-container">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>表单录入助手</div>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          表单录入助手
+          {isManager && (
+            <Tag size="small" color="green" style={{ marginLeft: 6 }}>
+              管理员
+            </Tag>
+          )}
+        </div>
         {ctx.tableName && (
           <span className="hint-text">
             当前表：<TagText text={ctx.tableName} />
@@ -102,7 +133,22 @@ export default function App() {
               未能读取到任何字段。若有部分字段不可见或不可用，通常是当前账号对相关字段没有权限，请联系多维表格管理员开通后重试。
             </div>
           )}
-          <Tabs type="line" defaultActiveKey="fixed" className="module-tabs">
+          <Tabs
+            key={ctx.tableId}
+            type="line"
+            defaultActiveKey={formConfig?.enabled ? 'form' : 'fixed'}
+            className="module-tabs"
+          >
+            {formConfig?.enabled && (
+              <TabPane tab="📋 表单填写" itemKey="form">
+                <FormFiller
+                  table={ctx.table}
+                  tableName={ctx.tableName}
+                  fields={ctx.fields}
+                  config={formConfig}
+                />
+              </TabPane>
+            )}
             <TabPane tab="📝 固定值批量录入" itemKey="fixed">
               <FixedValueInput table={ctx.table} tableName={ctx.tableName} fields={ctx.fields} />
             </TabPane>
@@ -112,6 +158,18 @@ export default function App() {
             <TabPane tab="📥 Excel 批量导入" itemKey="excel">
               <ExcelImport table={ctx.table} tableId={ctx.tableId} tableName={ctx.tableName} fields={ctx.fields} />
             </TabPane>
+            {isManager && (
+              <TabPane tab="⚙️ 表单配置" itemKey="config">
+                <FormConfigPanel
+                  table={ctx.table}
+                  tableId={ctx.tableId}
+                  tableName={ctx.tableName}
+                  fields={ctx.fields}
+                  config={adminConfig}
+                  onSaved={(cfg) => setFormConfig(mergeConfigWithFields(cfg, ctx.fields))}
+                />
+              </TabPane>
+            )}
           </Tabs>
         </>
       )}

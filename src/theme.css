@@ -133,3 +133,95 @@ body {
   padding-bottom: 4px;
   background: var(--semi-color-bg-0);
 }
+
+/* ---------- 表单填写 ---------- */
+.form-field {
+  margin-bottom: 12px;
+}
+
+.form-field-label {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  color: var(--semi-color-text-1);
+  margin-bottom: 4px;
+}
+
+.form-field-required {
+  color: var(--semi-color-danger);
+  margin-left: 2px;
+}
+
+.form-field-control {
+  min-width: 0;
+}
+
+.form-readonly-value {
+  padding: 6px 12px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-fill-0);
+  border-radius: 4px;
+  word-break: break-word;
+}
+
+/* ---------- 管理员表单配置 ---------- */
+.config-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.config-row-label {
+  width: 76px;
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 32px;
+  color: var(--semi-color-text-1);
+}
+
+.config-row-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.config-field {
+  padding: 10px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background: var(--semi-color-tertiary-light-default);
+}
+
+.config-field--off {
+  opacity: 0.6;
+}
+
+.config-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.config-field-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.config-field-switches {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 6px;
+  font-size: 13px;
+}
