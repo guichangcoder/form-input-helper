@@ -5,11 +5,11 @@ import { convertCellValue } from '../utils/convert';
 import { describeError } from '../utils/errors';
 import {
   collectUsersFromTable,
-  ensureSelectOptions,
   getCurrentUserId,
   writeRecords,
 } from '../utils/sdk';
 import type { TableFormConfig } from '../utils/formConfig';
+import { isWritableField } from '../utils/formConfig';
 import FieldEditor from './FieldEditor';
 
 interface FormFillerProps {
@@ -84,6 +84,9 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     const errors: string[] = [];
 
     for (const { fc, meta } of visibleFields) {
+      // 不可填写字段（公式、查找引用、创建时间等）不参与写入
+      if (!isWritableField(meta)) continue;
+
       if (fc.readOnly) {
         const raw = fc.fixedValue;
         if (raw === undefined || raw === null || raw === '') continue;
@@ -120,15 +123,6 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
 
     setSubmitting(true);
     try {
-      // 单选/多选出现新选项时自动创建
-      for (const fid of fieldIds) {
-        const meta = fieldById.get(fid);
-        if (!meta || (meta.type !== 3 && meta.type !== 4)) continue;
-        const v = values[fid];
-        const list = Array.isArray(v) ? v.map((x) => String(x)) : [String(v)];
-        const field = await table.getField(fid);
-        await ensureSelectOptions(field as never, list);
-      }
       const res = await writeRecords(table, [values], fieldIds);
       if (res.success > 0) {
         setSubmitted((n) => n + 1);
@@ -166,34 +160,50 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
         )}
       </div>
 
-      {visibleFields.map(({ fc, meta }) => (
-        <div key={meta.id} className="form-field">
-          <div className="form-field-label" title={meta.name}>
-            {meta.name}
-            {fc.required && !fc.readOnly && <span className="form-field-required">*</span>}
-            {fc.readOnly && (
-              <Tag size="small" color="grey" style={{ marginLeft: 6 }}>
-                只读
-              </Tag>
-            )}
+      {visibleFields.map(({ fc, meta }) => {
+        const writable = isWritableField(meta);
+        const readOnly = !writable || fc.readOnly;
+        return (
+          <div key={meta.id} className="form-field">
+            <div className="form-field-label" title={meta.name}>
+              {meta.name}
+              {writable && fc.required && !fc.readOnly && (
+                <span className="form-field-required">*</span>
+              )}
+              {!writable ? (
+                <Tag size="small" color="grey" style={{ marginLeft: 6 }}>
+                  不可填写
+                </Tag>
+              ) : (
+                fc.readOnly && (
+                  <Tag size="small" color="grey" style={{ marginLeft: 6 }}>
+                    只读
+                  </Tag>
+                )
+              )}
+            </div>
+            <div className="form-field-control">
+              {readOnly ? (
+                <div className="form-readonly-value">
+                  {writable
+                    ? displayText(meta, fc.fixedValue) || '（未设置）'
+                    : '（该字段不支持在此表单中填写）'}
+                </div>
+              ) : (
+                <FieldEditor
+                  field={meta}
+                  value={draft[meta.id]}
+                  onChange={(v) => setValue(meta.id, v)}
+                  users={users}
+                  currentUserId={currentUserId}
+                  userById={userById}
+                  multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}
+                />
+              )}
+            </div>
           </div>
-          <div className="form-field-control">
-            {fc.readOnly ? (
-              <div className="form-readonly-value">{displayText(meta, fc.fixedValue) || '（未设置）'}</div>
-            ) : (
-              <FieldEditor
-                field={meta}
-                value={draft[meta.id]}
-                onChange={(v) => setValue(meta.id, v)}
-                users={users}
-                currentUserId={currentUserId}
-                userById={userById}
-                multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}
-              />
-            )}
-          </div>
-        </div>
-      ))}
+        );
+      })}
 
       <div className="footer-bar">
         <Button

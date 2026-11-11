@@ -4,9 +4,7 @@ import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { BATCH_SIZE, FIELD_TYPE_LABEL, WRITABLE_FIELD_TYPES } from '../constants';
 import { convertCellValue } from '../utils/convert';
 import {
-  collectSelectValues,
   collectUsersFromTable,
-  ensureSelectOptions,
   getCurrentUserId,
   writeRecords,
 } from '../utils/sdk';
@@ -220,20 +218,11 @@ export default function FixedValueInput({ table, tableName, fields }: FixedValue
         ...editableFields.map((f) => f.id),
       ]),
     );
-    const selectFieldIds = fieldIds.filter((fid) => {
-      const t = fieldById.get(fid)?.type;
-      return t === 3 || t === 4;
-    });
 
     setImporting(true);
     setProgress({ done: 0, total: records.length });
     setResult(null);
     try {
-      for (const fid of selectFieldIds) {
-        const field = await table.getField(fid);
-        const values = collectSelectValues(records, fid);
-        await ensureSelectOptions(field as never, values);
-      }
       const res = await writeRecords(table, records, fieldIds, (done, total) =>
         setProgress({ done, total }),
       );

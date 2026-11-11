@@ -5,8 +5,6 @@ import { BATCH_SIZE, IMPORTABLE_FIELD_TYPES, MAPPING_STORAGE_KEY, PREVIEW_ROWS }
 import { parseExcel, type ParsedSheet, cellDisplayText } from '../utils/excel';
 import { convertCellValue } from '../utils/convert';
 import {
-  collectSelectValues,
-  ensureSelectOptions,
   getTableContext,
   writeRecords,
 } from '../utils/sdk';
@@ -217,22 +215,11 @@ export default function ExcelImport({ table, tableId, tableName, fields }: Excel
     const fieldIds = Array.from(
       new Set(Object.values(mapping).filter((v) => v !== SKIP && fieldById.has(v))),
     );
-    const selectFields = fieldIds.filter((fid) => {
-      const t = fieldById.get(fid)?.type;
-      return t === 3 || t === 4;
-    });
 
     setImporting(true);
     setProgress({ done: 0, total: nonEmpty.length });
     setResult(null);
     try {
-      // 1) 同步单选/多选选项
-      for (const fid of selectFields) {
-        const field = await table.getField(fid);
-        const values = collectSelectValues(nonEmpty, fid);
-        await ensureSelectOptions(field as never, values);
-      }
-      // 2) 批量写入
       const res = await writeRecords(table, nonEmpty, fieldIds, (done, total) =>
         setProgress({ done, total }),
       );

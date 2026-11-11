@@ -166,8 +166,8 @@ export function cellToRawValue(
       return (cell as { text?: string } | null)?.text ?? '';
     case 4: // MultiSelect
       return Array.isArray(cell)
-        ? (cell as Array<{ text?: string }>).map((x) => x?.text ?? '').join('、')
-        : '';
+        ? (cell as Array<{ text?: string }>).map((x) => x?.text ?? '').filter(Boolean)
+        : [];
     case 5: // DateTime
       return typeof cell === 'number' ? cell : '';
     case 7: // Checkbox

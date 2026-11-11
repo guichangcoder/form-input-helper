@@ -225,3 +225,26 @@ body {
   margin-top: 6px;
   font-size: 13px;
 }
+
+.config-drag-handle {
+  flex-shrink: 0;
+  cursor: grab;
+  padding: 0 2px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--semi-color-text-2);
+  user-select: none;
+}
+
+.config-drag-handle:active {
+  cursor: grabbing;
+}
+
+.config-field--dragging {
+  opacity: 0.5;
+}
+
+.config-field--drop {
+  border-color: var(--semi-color-primary);
+  box-shadow: 0 0 0 1px var(--semi-color-primary);
+}

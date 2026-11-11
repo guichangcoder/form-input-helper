@@ -3,7 +3,7 @@ import { Button, Checkbox, Progress, Radio, RadioGroup, Select, Tag, Toast } fro
 import type { IFieldMeta, IOpenUser, IRecord, ITable } from '@lark-base-open/js-sdk';
 import { BATCH_SIZE, FIELD_TYPE_LABEL, WRITABLE_FIELD_TYPES } from '../constants';
 import { convertCellValue } from '../utils/convert';
-import { collectUsersFromTable, ensureSelectOptions, getCurrentUserId } from '../utils/sdk';
+import { collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
 import {
   cellText,
   cellToRawValue,
@@ -232,38 +232,6 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matched, updateFieldIds, mode]);
 
-  /** 收集单选/多选字段将出现的新选项并创建 */
-  const ensureAllSelectOptions = async () => {
-    if (!table) return;
-    const selectIds = updateFieldIds.filter((fid) => {
-      const t = fieldById.get(fid)?.type;
-      return t === 3 || t === 4;
-    });
-    for (const fid of selectIds) {
-      const meta = fieldById.get(fid);
-      if (!meta) continue; // 字段缺失/无权限：跳过
-      const field = await table.getField(fid);
-      const values = new Set<string>();
-      if (mode === 'bulk') {
-        const d = bulkUpdates[fid];
-        if (d && !d.clear) {
-          const v = convertCellValue(d.rawValue, meta).value;
-          if (Array.isArray(v)) (v as string[]).forEach((x) => values.add(x));
-          else if (v != null) values.add(String(v));
-        }
-      } else {
-        Object.values(rowDrafts).forEach((rec) => {
-          const d = rec[fid];
-          if (!d || d.clear) return;
-          const v = convertCellValue(d.rawValue, meta).value;
-          if (Array.isArray(v)) (v as string[]).forEach((x) => values.add(x));
-          else if (v != null) values.add(String(v));
-        });
-      }
-      if (values.size) await ensureSelectOptions(field as never, Array.from(values));
-    }
-  };
-
   /** 构建单条记录的新字段值（row 模式） */
   const buildRowFields = (rec: IRecord): { fields: Record<string, unknown>; errors: string[] } => {
     const fieldsOut: Record<string, unknown> = {};
@@ -336,8 +304,6 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     setProgress({ done: 0, total: matched.length });
     setResult(null);
     try {
-      await ensureAllSelectOptions();
-
       const allErrors: Array<{ index: number; message: string }> = [];
       const payloads: Array<{ recordId: string; fields: Record<string, unknown> }> = [];
       if (mode === 'row') {
@@ -597,7 +563,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
           {mode === 'row' ? `更新 ${matched.length} 条记录（逐条，表「${tableName}」）` : `更新 ${matched.length} 条记录（统一值，表「${tableName}」）`}
         </Button>
         <div className="hint-text" style={{ marginTop: 4 }}>
-          留空且未勾选「清空」的字段保持原样不动；单选/多选出现新选项时自动创建。
+          留空且未勾选「清空」的字段保持原样不动；单选/多选只能选择数据表中已有的选项。
         </div>
         {result && (
           <div className="result-box">

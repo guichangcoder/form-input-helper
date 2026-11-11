@@ -21,16 +21,22 @@ const { TabPane } = Tabs;
 interface ContextState {
   table: ITable | null;
   tableId: string;
+  viewId: string;
   tableName: string;
+  /** 数据表全部字段 */
   fields: IFieldMeta[];
+  /** 当前视图可见字段（按视图顺序） */
+  visibleFields: IFieldMeta[];
 }
 
 export default function App() {
   const [ctx, setCtx] = useState<ContextState>({
     table: null,
     tableId: '',
+    viewId: '',
     tableName: '',
     fields: [],
+    visibleFields: [],
   });
   const [loading, setLoading] = useState(true);
   /** 读取上下文失败时的可读原因（权限不足 / 数据表缺失等） */
@@ -40,6 +46,7 @@ export default function App() {
   /** 当前数据表的表单配置（未配置为 null） */
   const [formConfig, setFormConfig] = useState<TableFormConfig | null>(null);
   const tableIdRef = useRef('');
+  const viewIdRef = useRef('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const load = async () => {
@@ -48,14 +55,16 @@ export default function App() {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => setLoading(false), 8000);
     try {
-      const { table, tableName, tableId, fields } = await getTableContext();
+      const { table, tableName, tableId, viewId, fields, visibleFields } = await getTableContext();
       tableIdRef.current = tableId;
+      viewIdRef.current = viewId;
       setErrorMsg('');
-      setCtx({ table, tableName, tableId, fields });
+      setCtx({ table, tableName, tableId, viewId, fields, visibleFields });
 
       // 管理权限 + 该表的表单配置（配置按数据表维度存储，表内用户共享）
       const [manager, saved] = await Promise.all([isBaseManager(), loadFormConfig(tableId)]);
       setIsManager(manager);
+      // 配置按数据表维度存全量字段，保存顺序以配置为准（首次为视图顺序）
       setFormConfig(saved ? mergeConfigWithFields(saved, fields) : null);
     } catch (e) {
       console.error('获取表信息失败', e);
@@ -68,12 +77,13 @@ export default function App() {
 
   useEffect(() => {
     load();
-    // 监听选中变化：切换数据表时自动刷新上下文
+    // 监听选中变化：切换数据表或视图时自动刷新上下文（字段列表随视图变化）
     let off: (() => void) | undefined;
     try {
       off = bitable.base.onSelectionChange((ev) => {
         const tid = ev.data?.tableId;
-        if (tid && tid !== tableIdRef.current) {
+        const vid = ev.data?.viewId;
+        if ((tid && tid !== tableIdRef.current) || (vid && vid !== viewIdRef.current)) {
           load();
         }
       });
@@ -89,10 +99,15 @@ export default function App() {
     };
   }, []);
 
+  /** 当前视图可见字段的 ID（按视图顺序） */
+  const viewFieldIds = useMemo(() => ctx.visibleFields.map((f) => f.id), [ctx.visibleFields]);
+
   // 管理员配置面板始终有可编辑的配置对象（未配置时使用默认值，保存后才生效）
   const adminConfig = useMemo(
-    () => formConfig ?? buildDefaultConfig(ctx.fields),
-    [formConfig, ctx.fields],
+    () =>
+      formConfig ??
+      mergeConfigWithFields(buildDefaultConfig(ctx.visibleFields), ctx.fields),
+    [formConfig, ctx.fields, ctx.visibleFields],
   );
 
   return (
@@ -128,9 +143,9 @@ export default function App() {
         </div>
       ) : (
         <>
-          {ctx.fields.length === 0 && (
+          {ctx.visibleFields.length === 0 && (
             <div className="hint-text" style={{ marginBottom: 10 }}>
-              未能读取到任何字段。若有部分字段不可见或不可用，通常是当前账号对相关字段没有权限，请联系多维表格管理员开通后重试。
+              当前视图未读取到可见字段。若有部分字段不可见或不可用，通常是当前账号对相关字段没有权限，请联系多维表格管理员开通后重试。
             </div>
           )}
           <Tabs
@@ -144,7 +159,7 @@ export default function App() {
                 <FormFiller
                   table={ctx.table}
                   tableName={ctx.tableName}
-                  fields={ctx.fields}
+                  fields={ctx.visibleFields}
                   config={formConfig}
                 />
               </TabPane>
@@ -165,6 +180,7 @@ export default function App() {
                   tableId={ctx.tableId}
                   tableName={ctx.tableName}
                   fields={ctx.fields}
+                  visibleFieldIds={viewFieldIds}
                   config={adminConfig}
                   onSaved={(cfg) => setFormConfig(mergeConfigWithFields(cfg, ctx.fields))}
                 />

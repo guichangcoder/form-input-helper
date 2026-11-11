@@ -83,15 +83,26 @@ export async function isBaseManager(): Promise<boolean> {
   }
 }
 
-/** 依据当前字段生成默认配置：可写字段全部显示、非必填、可编辑 */
+/** 判断字段是否可填写（表单中可写入值） */
+export function isWritableField(field: IFieldMeta): boolean {
+  return WRITABLE_FIELD_TYPES.includes(field.type as number);
+}
+
+/** 依据字段生成默认配置：可填写字段默认显示，不可填写字段默认隐藏但可在配置中查看 */
 export function buildDefaultConfig(fields: IFieldMeta[]): TableFormConfig {
   return {
     enabled: true,
     title: '表单填写',
     description: '',
-    fields: fields
-      .filter((f) => WRITABLE_FIELD_TYPES.includes(f.type as number))
-      .map((f) => ({ fieldId: f.id, visible: true, required: false, readOnly: false })),
+    fields: fields.map((f) => {
+      const writable = isWritableField(f);
+      return {
+        fieldId: f.id,
+        visible: writable,
+        required: false,
+        readOnly: !writable,
+      };
+    }),
     updatedAt: 0,
   };
 }
@@ -99,21 +110,26 @@ export function buildDefaultConfig(fields: IFieldMeta[]): TableFormConfig {
 /**
  * 用最新字段列表校正配置：
  * - 保留已有字段的顺序与设置
- * - 剔除已被删除/不可写的字段
- * - 新增字段追加到末尾（默认显示、可编辑）
+ * - 剔除已被删除的字段
+ * - 新增字段追加到末尾（可填写字段默认显示，不可填写字段默认隐藏）
  */
 export function mergeConfigWithFields(
   config: TableFormConfig,
   fields: IFieldMeta[],
 ): TableFormConfig {
-  const writableIds = fields
-    .filter((f) => WRITABLE_FIELD_TYPES.includes(f.type as number))
-    .map((f) => f.id);
-  const writableSet = new Set(writableIds);
-  const kept = config.fields.filter((f) => writableSet.has(f.fieldId));
+  const byId = new Map(fields.map((f) => [f.id, f]));
+  const kept = config.fields.filter((f) => byId.has(f.fieldId));
   const existing = new Set(kept.map((f) => f.fieldId));
-  const added: FormFieldConfig[] = writableIds
-    .filter((id) => !existing.has(id))
-    .map((id) => ({ fieldId: id, visible: true, required: false, readOnly: false }));
+  const added: FormFieldConfig[] = fields
+    .filter((f) => !existing.has(f.id))
+    .map((f) => {
+      const writable = isWritableField(f);
+      return {
+        fieldId: f.id,
+        visible: writable,
+        required: false,
+        readOnly: !writable,
+      };
+    });
   return { ...config, fields: [...kept, ...added] };
 }

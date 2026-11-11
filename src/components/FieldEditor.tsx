@@ -52,23 +52,39 @@ export default function FieldEditor({
           placeholder={placeholder || '请输入数字'}
         />
       );
-    case 3: // SingleSelect
+    case 3: // SingleSelect：只能选择该字段在多维表格中已配置的选项
+      if (!options.length) {
+        return <div className="hint-text">该字段在多维表格中还没有选项，请先在数据表中添加选项。</div>;
+      }
       return (
-        <SingleSelectEditor
-          options={options}
-          value={value as string}
-          onChange={onChange}
-          placeholder={placeholder}
+        <Select
+          value={typeof value === 'string' && value ? value : undefined}
+          optionList={options.map((o) => ({ label: o, value: o }))}
+          placeholder={placeholder || '请选择选项'}
+          style={{ width: '100%' }}
+          filter
+          onChange={(v) => onChange(typeof v === 'string' ? v : '')}
         />
       );
-    case 4: // MultiSelect
+    case 4: {
+      // MultiSelect：只能选择该字段在多维表格中已配置的选项
+      if (!options.length) {
+        return <div className="hint-text">该字段在多维表格中还没有选项，请先在数据表中添加选项。</div>;
+      }
+      const selected = Array.isArray(value) ? (value as string[]) : value ? [String(value)] : [];
       return (
-        <Input
-          value={value as string}
-          onChange={(v) => onChange(v)}
-          placeholder={placeholder || (options.length ? `用逗号分隔多个值；现有选项：${options.join('、')}` : '用逗号分隔多个值（新选项将自动创建）')}
+        <Select
+          multiple
+          value={selected}
+          optionList={options.map((o) => ({ label: o, value: o }))}
+          placeholder={placeholder || '请选择选项（可多选）'}
+          style={{ width: '100%' }}
+          filter
+          maxTagCount={3}
+          onChange={(v) => onChange((Array.isArray(v) ? v : v ? [v] : []) as string[])}
         />
       );
+    }
     case 5: // DateTime
       return (
         <DatePicker
@@ -144,50 +160,6 @@ function buildUserOptions(
     opts.push({ label: `当前登录用户（${currentUserId}）`, value: currentUserId });
   }
   return opts;
-}
-
-/** 单选字段编辑器：下拉选择已有选项 + 手动输入新选项兜底 */
-function SingleSelectEditor({
-  options,
-  value,
-  onChange,
-  placeholder,
-}: {
-  options: string[];
-  value: string;
-  onChange: (v: unknown) => void;
-  placeholder?: string;
-}) {
-  const [newText, setNewText] = useState('');
-  const addNew = () => {
-    const v = newText.trim();
-    if (!v) return;
-    onChange(v);
-    setNewText('');
-  };
-  return (
-    <div>
-      <Select
-        value={value || undefined}
-        optionList={options.map((o) => ({ label: o, value: o }))}
-        placeholder={placeholder || '请选择（点击展开选项）'}
-        style={{ width: '100%' }}
-        filter
-        onChange={(v) => onChange(typeof v === 'string' ? v : v ?? '')}
-      />
-      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-        <Input
-          size="small"
-          value={newText}
-          onChange={setNewText}
-          placeholder={options.length ? '无此选项？输入新选项名后点添加' : '当前无选项，输入选项名后点添加'}
-        />
-        <Button size="small" onClick={addNew}>
-          添加
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 interface PersonEditorProps {
