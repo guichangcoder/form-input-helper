@@ -350,8 +350,12 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
   };
 
   const fixedSelectOptions = useMemo(
-    () => supportedFields.map((f) => ({ label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`, value: f.id })),
-    [supportedFields],
+    () =>
+      supportedFields.map((f) => ({
+        label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）${requiredIds.has(f.id) ? ' *必填' : ''}`,
+        value: f.id,
+      })),
+    [supportedFields, requiredIds],
   );
   const availableFixedOptions = fixedSelectOptions.filter(
     (o) => !fixedFields.some((x) => x.fieldId === o.value),
@@ -386,7 +390,12 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
         return (
           <div key={fc.fieldId} className="fixed-field-card">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Tag color="blue">{meta.name}</Tag>
+              <Tag color="blue">
+                {meta.name}
+                {requiredIds.has(meta.id) && (
+                  <span style={{ color: 'var(--semi-color-danger)' }}> *</span>
+                )}
+              </Tag>
               <span className="hint-text">= 固定值</span>
               <Button
                 size="small"

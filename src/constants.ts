@@ -22,6 +22,16 @@ export const WRITABLE_FIELD_TYPES: FieldType[] = [
   FieldType.User,
 ];
 
+/** 不可用于筛选的字段类型：单元格值无法转换为可比较的文本/数字 */
+export const NON_FILTERABLE_FIELD_TYPES: FieldType[] = [
+  FieldType.NotSupport,
+  FieldType.Attachment,
+  FieldType.Location,
+  FieldType.GroupChat,
+  FieldType.Object,
+  FieldType.Denied,
+];
+
 /** 字段类型显示名 */
 export const FIELD_TYPE_LABEL: Record<number, string> = {
   [FieldType.NotSupport]: '不支持',

@@ -11,6 +11,21 @@ export interface MatchCondition {
   rawValue: unknown;
 }
 
+/** 通用兜底：把任意单元格值转为可比较文本（查找引用/公式/关联等类型） */
+function genericCellText(cell: unknown): string {
+  if (cell == null) return '';
+  if (typeof cell === 'string') return cell;
+  if (typeof cell === 'number' || typeof cell === 'boolean') return String(cell);
+  if (Array.isArray(cell)) {
+    return (cell as unknown[]).map(genericCellText).filter(Boolean).join('、');
+  }
+  const o = cell as { text?: string; name?: string; value?: unknown };
+  if (typeof o.text === 'string') return o.text;
+  if (typeof o.name === 'string') return o.name;
+  if (o.value !== undefined) return genericCellText(o.value);
+  return '';
+}
+
 /** 单元格值 → 可比较值 */
 function cellComparable(cell: IOpenCellValue | null | undefined, fieldMeta: IFieldMeta): unknown {
   if (cell == null) return fieldMeta.type === 7 ? false : '';
@@ -40,17 +55,39 @@ function cellComparable(cell: IOpenCellValue | null | undefined, fieldMeta: IFie
       return Array.isArray(cell)
         ? (cell as Array<{ id?: string }>).map((u) => u?.id).filter(Boolean)
         : [];
-    default:
-      return null;
+    case 1001: // CreatedTime
+    case 1002: // ModifiedTime
+      return typeof cell === 'number' ? cell : Number(cell);
+    default: // 查找引用/公式/关联/自动编号等：按文本或数字比较
+      return genericCellText(cell);
   }
 }
 
 /** 条件输入 → 可比较值 */
 function condComparable(cond: MatchCondition): { value: unknown; ok: boolean } {
+  const type = cond.fieldMeta.type as number;
+  const rawEmpty =
+    cond.rawValue == null ||
+    (typeof cond.rawValue === 'string' && cond.rawValue.trim() === '') ||
+    (Array.isArray(cond.rawValue) && cond.rawValue.length === 0);
+  if (rawEmpty) return { value: undefined, ok: false };
+
+  // 创建时间/修改时间：按日期解析（条件输入走日期编辑器）
+  if (type === 1001 || type === 1002) {
+    const r = convertCellValue(cond.rawValue, { ...cond.fieldMeta, type: 5 } as IFieldMeta);
+    return r.ok && !r.skip ? { value: Number(r.value), ok: true } : { value: undefined, ok: false };
+  }
+
   const res = convertCellValue(cond.rawValue, cond.fieldMeta);
-  if (!res.ok || res.skip) return { value: undefined, ok: res.ok && !res.skip };
+  if (!res.ok) {
+    // 非可填写类型（查找引用/公式/关联/自动编号等）：按文本或数字比较
+    const s = String(cond.rawValue).trim();
+    const n = Number(s);
+    return { value: Number.isFinite(n) ? n : s, ok: true };
+  }
+  if (res.skip) return { value: undefined, ok: false };
   const v = res.value;
-  switch (cond.fieldMeta.type as number) {
+  switch (type) {
     case 1:
       return { value: String(v), ok: true };
     case 2:
@@ -73,8 +110,11 @@ function condComparable(cond: MatchCondition): { value: unknown; ok: boolean } {
           : [(v as { id: string }).id],
         ok: true,
       };
-    default:
-      return { value: undefined, ok: false };
+    default: {
+      const s = String(Array.isArray(v) ? (v as unknown[]).join('、') : v);
+      const n = Number(s);
+      return { value: Number.isFinite(n) ? n : s, ok: true };
+    }
   }
 }
 
@@ -87,7 +127,7 @@ export function matchCell(cell: IOpenCellValue | null | undefined, cond: MatchCo
 
   switch (cond.operator) {
     case 'eq':
-      if (type === 5 && typeof cellV === 'number' && typeof condV === 'number') {
+      if ((type === 5 || type === 1001 || type === 1002) && typeof cellV === 'number' && typeof condV === 'number') {
         return sameDay(cellV, condV);
       }
       if (Array.isArray(cellV)) {
@@ -98,11 +138,9 @@ export function matchCell(cell: IOpenCellValue | null | undefined, cond: MatchCo
         const cellS = String(cellV).trim();
         return condV.every((c) => cellS === String(c).trim());
       }
-      // 文本忽略大小写与首尾空格
-      if (type === 1) {
-        return String(cellV).trim().toLowerCase() === String(condV).trim().toLowerCase();
-      }
-      return cellV === condV;
+      if (typeof cellV === 'number' && typeof condV === 'number') return cellV === condV;
+      // 文本忽略大小写与首尾空格（兼容查找引用/公式等文本结果）
+      return String(cellV).trim().toLowerCase() === String(condV).trim().toLowerCase();
     case 'contains':
       if (typeof cellV === 'string' && typeof condV === 'string') {
         return cellV.toLowerCase().includes(condV.toLowerCase());
@@ -138,13 +176,19 @@ export function operatorsForField(fieldMeta: IFieldMeta): Array<{ label: string;
         { label: '小于等于', value: 'lte' },
       ];
     case 5: // 日期
+    case 1001: // 创建时间
+    case 1002: // 修改时间
       return [
         { label: '等于（当天）', value: 'eq' },
         { label: '不早于', value: 'gte' },
         { label: '不晚于', value: 'lte' },
       ];
     default:
-      return [{ label: '等于', value: 'eq' }];
+      // 其余类型（查找引用/公式/关联/自动编号等）按文本比较
+      return [
+        { label: '等于', value: 'eq' },
+        { label: '包含', value: 'contains' },
+      ];
   }
 }
 

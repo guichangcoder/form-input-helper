@@ -1,7 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Progress, Radio, RadioGroup, Select, Tag, Toast } from '@douyinfe/semi-ui';
+import { FieldType } from '@lark-base-open/js-sdk';
 import type { IFieldMeta, IOpenUser, IRecord, ITable } from '@lark-base-open/js-sdk';
-import { BATCH_SIZE, FIELD_TYPE_LABEL, WRITABLE_FIELD_TYPES } from '../constants';
+import {
+  BATCH_SIZE,
+  FIELD_TYPE_LABEL,
+  NON_FILTERABLE_FIELD_TYPES,
+  WRITABLE_FIELD_TYPES,
+} from '../constants';
 import { convertCellValue } from '../utils/convert';
 import { collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
 import {
@@ -352,9 +358,15 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     }
   };
 
+  /** 可作为筛选条件的字段：当前视图有权限的全部字段（含查找引用/公式等只读字段） */
+  const filterableFields = useMemo(
+    () => fields.filter((f) => !NON_FILTERABLE_FIELD_TYPES.includes(f.type as FieldType)),
+    [fields],
+  );
+
   const condFieldOptions = useMemo(
-    () => writableFields.map((f) => ({ label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`, value: f.id })),
-    [writableFields],
+    () => filterableFields.map((f) => ({ label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`, value: f.id })),
+    [filterableFields],
   );
   const availableCondOptions = condFieldOptions.filter((o) => !conds.some((c) => c.fieldId === o.value));
 
@@ -386,6 +398,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       </div>
       <div className="hint-text" style={{ marginBottom: 8 }}>
         基于字段值筛选已有记录，条件之间为「并且」关系；文本支持等于/包含，数字与日期支持比较。
+        可筛选当前视图有权限的全部字段（含查找引用、公式等只读字段，按文本比较）。
       </div>
 
       {conds.map((c) => {
@@ -414,8 +427,9 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       })}
       {availableCondOptions.length > 0 && (
         <Select
+          filter
           optionList={availableCondOptions}
-          placeholder="+ 添加筛选条件…"
+          placeholder="+ 添加筛选条件（可输入关键字搜索字段）…"
           style={{ width: '100%' }}
           onChange={(v) => {
             if (typeof v === 'string') addCond(v);
@@ -452,9 +466,10 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       {matched.length > 0 && (
         <Select
           multiple
+          filter
           value={updateFieldIds}
           optionList={updateFieldOptions}
-          placeholder="+ 选择要修改的字段（可多选）…"
+          placeholder="+ 选择要修改的字段（可输入关键字搜索，可多选）…"
           style={{ width: '100%', marginBottom: 10 }}
           maxTagCount={4}
           onChange={handleFieldIdsChange}

@@ -105,6 +105,27 @@ export default function FieldEditor({
           }}
         />
       );
+    case 1001: // CreatedTime（创建时间，只读字段，仅用于筛选）
+    case 1002: // ModifiedTime（修改时间，只读字段，仅用于筛选）
+      return (
+        <DatePicker
+          value={typeof value === 'number' ? value : undefined}
+          format="yyyy-MM-dd"
+          placeholder={placeholder || '选择日期'}
+          style={{ width: '100%' }}
+          onChange={(v) => {
+            const d = Array.isArray(v) ? v[0] : v;
+            if (d instanceof Date && !Number.isNaN(d.getTime())) {
+              onChange(d.getTime());
+            } else if (typeof d === 'string' && d) {
+              const t = Date.parse(d.replace(/-/g, '/'));
+              onChange(Number.isNaN(t) ? '' : t);
+            } else {
+              onChange('');
+            }
+          }}
+        />
+      );
     case 7: // Checkbox
       return (
         <Checkbox checked={Boolean(value)} onChange={(e) => onChange(e.target.checked ? '是' : '')}>
