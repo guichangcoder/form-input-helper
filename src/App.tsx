@@ -110,6 +110,10 @@ export default function App() {
     [formConfig, ctx.fields, ctx.visibleFields],
   );
 
+  // 管理员配置的各模块显示开关（未配置时全部显示）
+  const showRecordUpdate = formConfig ? formConfig.recordUpdateEnabled : true;
+  const showExcelImport = formConfig ? formConfig.excelImportEnabled : true;
+
   return (
     <div className="app-container">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -172,12 +176,16 @@ export default function App() {
                 config={formConfig}
               />
             </TabPane>
-            <TabPane tab="🎯 记录筛选修改" itemKey="update">
-              <RecordUpdater table={ctx.table} tableName={ctx.tableName} fields={ctx.fields} />
-            </TabPane>
-            <TabPane tab="📥 Excel 批量导入" itemKey="excel">
-              <ExcelImport table={ctx.table} tableId={ctx.tableId} tableName={ctx.tableName} fields={ctx.fields} />
-            </TabPane>
+            {showRecordUpdate && (
+              <TabPane tab="🎯 记录筛选修改" itemKey="update">
+                <RecordUpdater table={ctx.table} tableName={ctx.tableName} fields={ctx.fields} />
+              </TabPane>
+            )}
+            {showExcelImport && (
+              <TabPane tab="📥 Excel 批量导入" itemKey="excel">
+                <ExcelImport table={ctx.table} tableId={ctx.tableId} tableName={ctx.tableName} fields={ctx.fields} />
+              </TabPane>
+            )}
             {isManager && (
               <TabPane tab="⚙️ 表单配置" itemKey="config">
                 <FormConfigPanel

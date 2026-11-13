@@ -4,8 +4,8 @@ import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { convertCellValue } from '../utils/convert';
 import { describeError } from '../utils/errors';
 import {
-  collectUsersFromTable,
   getCurrentUserId,
+  loadPeopleCandidates,
   writeRecords,
 } from '../utils/sdk';
 import type { TableFormConfig } from '../utils/formConfig';
@@ -38,31 +38,40 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     [config.fields, fieldById],
   );
 
-  // 人员库（人员字段选择用）
-  const [users, setUsers] = useState<IOpenUser[]>([]);
+  // 人员候选：按「人员」字段分别解析（支持管理员配置的跨表来源）
+  const [usersByField, setUsersByField] = useState<Map<string, IOpenUser[]>>(new Map());
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+
+  /** 需要解析候选人员的字段（仅「人员」类型） */
+  const peopleEntries = useMemo(
+    () =>
+      config.fields
+        .filter((fc) => (fieldById.get(fc.fieldId)?.type as number) === 11)
+        .map((fc) => ({ fieldId: fc.fieldId, source: fc.peopleSource })),
+    [config.fields, fieldById],
+  );
 
   useEffect(() => {
     if (!table) return;
     let cancelled = false;
-    Promise.all([collectUsersFromTable(table), getCurrentUserId()])
-      .then(([list, uid]) => {
+    Promise.all([loadPeopleCandidates(table, peopleEntries), getCurrentUserId()])
+      .then(([map, uid]) => {
         if (cancelled) return;
-        setUsers(list);
+        setUsersByField(map);
         setCurrentUserId(uid);
       })
       .catch((e) => console.error('读取人员字段失败', e));
     return () => {
       cancelled = true;
     };
-  }, [table]);
+  }, [table, peopleEntries]);
 
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
-    users.forEach((u) => u.id && m.set(u.id, u));
+    usersByField.forEach((list) => list.forEach((u) => u.id && m.set(u.id, u)));
     if (currentUserId) m.set(currentUserId, { id: currentUserId });
     return m;
-  }, [users, currentUserId]);
+  }, [usersByField, currentUserId]);
 
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -194,7 +203,7 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
                   field={meta}
                   value={draft[meta.id]}
                   onChange={(v) => setValue(meta.id, v)}
-                  users={users}
+                  users={usersByField.get(meta.id) ?? []}
                   currentUserId={currentUserId}
                   userById={userById}
                   multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}

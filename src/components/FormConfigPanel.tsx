@@ -1,15 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Input, Switch, Tag, TextArea, Toast } from '@douyinfe/semi-ui';
-import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
+import { Button, Checkbox, Input, Select, Switch, Tag, TextArea, Toast } from '@douyinfe/semi-ui';
+import { bitable, type IFieldMeta, type IOpenUser, type ITable } from '@lark-base-open/js-sdk';
 import { FIELD_TYPE_LABEL } from '../constants';
 import { describeError } from '../utils/errors';
-import { collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
+import { findInvalidOptions, optionsFromMeta } from '../utils/options';
+import { USER_FIELD_TYPES, collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
 import {
   buildDefaultConfig,
   isWritableField,
   mergeConfigWithFields,
   saveFormConfig,
   type FormFieldConfig,
+  type PeopleSource,
   type TableFormConfig,
 } from '../utils/formConfig';
 import FieldEditor from './FieldEditor';
@@ -95,6 +97,58 @@ export default function FormConfigPanel({
     return m;
   }, [users, currentUserId]);
 
+  // 「候选人员来源」：可选来源数据表，及其人员类字段
+  const [sourceTables, setSourceTables] = useState<Array<{ id: string; name: string }>>([]);
+  /** tableId -> 该表的人员类字段 */
+  const [sourceFields, setSourceFields] = useState<Record<string, IFieldMeta[]>>({});
+  const [sourceFieldLoading, setSourceFieldLoading] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    bitable.base
+      .getTableMetaList()
+      .then((list) => {
+        if (cancelled) return;
+        setSourceTables((list ?? []).map((t) => ({ id: t.id, name: t.name })));
+      })
+      .catch((e) => {
+        console.error('读取数据表列表失败', e);
+        if (!cancelled) Toast.error('读取数据表列表失败，可能没有其他数据表的访问权限');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** 加载来源表的人员类字段（按 tableId 缓存） */
+  const loadSourceFields = async (sourceTableId: string) => {
+    if (!sourceTableId || sourceFields[sourceTableId]) return;
+    setSourceFieldLoading(sourceTableId);
+    try {
+      const t = await bitable.base.getTable(sourceTableId);
+      const metas = (await t.getFieldMetaList()) ?? [];
+      const people = metas.filter((f) => USER_FIELD_TYPES.includes(f.type as number));
+      setSourceFields((m) => ({ ...m, [sourceTableId]: people }));
+    } catch (e) {
+      console.error('读取来源表字段失败', e);
+      Toast.error(describeError(e, '读取来源表字段失败，请确认你对来源表有访问权限'));
+    } finally {
+      setSourceFieldLoading(null);
+    }
+  };
+
+  /** 配置中已引用到的来源表，进入页面时预加载其人员类字段 */
+  useEffect(() => {
+    const ids = new Set<string>();
+    local.fields.forEach((fc) => {
+      if (fc.peopleSource?.tableId) ids.add(fc.peopleSource.tableId);
+    });
+    ids.forEach((id) => {
+      void loadSourceFields(id);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [local.fields]);
+
   const patchField = (fieldId: string, patch: Partial<FormFieldConfig>) => {
     setLocal((c) => ({
       ...c,
@@ -116,9 +170,49 @@ export default function FormConfigPanel({
     });
   };
 
+  /**
+   * 校验只读字段的固定值：单选/多选必须命中数据表现有选项。
+   * 插件只允许「选择」选项，绝不新增/修改数据表的选项。
+   */
+  const validateFixedValues = (cfg: TableFormConfig): string[] => {
+    const problems: string[] = [];
+    cfg.fields.forEach((fc) => {
+      const meta = fieldById.get(fc.fieldId);
+      if (!meta) return;
+      const type = meta.type as number;
+      if (type !== 3 && type !== 4) return;
+      const raw = fc.fixedValue;
+      const empty =
+        raw == null ||
+        (typeof raw === 'string' && !raw.trim()) ||
+        (Array.isArray(raw) && raw.length === 0);
+      if (empty) return;
+      const invalid = findInvalidOptions(raw, optionsFromMeta(meta), type === 4);
+      if (invalid.length) {
+        problems.push(
+          `字段「${meta.name}」的固定值「${invalid.join('、')}」已不是数据表中的选项，请重新选择或清空`,
+        );
+      }
+    });
+    return problems;
+  };
+
   const handleSave = async () => {
     if (!tableId) {
       Toast.error('未能获取当前数据表 ID，请重新打开插件');
+      return;
+    }
+    const problems = validateFixedValues(local);
+    local.fields.forEach((fc) => {
+      if (!fc.peopleSource) return;
+      const meta = fieldById.get(fc.fieldId);
+      if (!meta) return;
+      if (!fc.peopleSource.tableId || !fc.peopleSource.fieldId) {
+        problems.push(`字段「${meta.name}」已选择候选人员来源，请同时指定来源数据表与来源字段`);
+      }
+    });
+    if (problems.length) {
+      Toast.error(problems.join('；'));
       return;
     }
     setSaving(true);
@@ -166,6 +260,32 @@ export default function FormConfigPanel({
           />
           <span className="hint-text" style={{ marginLeft: 8 }}>
             关闭后用户看不到「表单填写」页
+          </span>
+        </div>
+      </div>
+
+      <div className="config-row">
+        <div className="config-row-label">记录筛选修改</div>
+        <div className="config-row-control">
+          <Switch
+            checked={local.recordUpdateEnabled}
+            onChange={(v) => setLocal((c) => ({ ...c, recordUpdateEnabled: v }))}
+          />
+          <span className="hint-text" style={{ marginLeft: 8 }}>
+            关闭后用户看不到「记录筛选修改」页
+          </span>
+        </div>
+      </div>
+
+      <div className="config-row">
+        <div className="config-row-label">Excel 批量导入</div>
+        <div className="config-row-control">
+          <Switch
+            checked={local.excelImportEnabled}
+            onChange={(v) => setLocal((c) => ({ ...c, excelImportEnabled: v }))}
+          />
+          <span className="hint-text" style={{ marginLeft: 8 }}>
+            关闭后用户看不到「Excel 批量导入」页
           </span>
         </div>
       </div>
@@ -305,6 +425,63 @@ export default function FormConfigPanel({
                   userById={userById}
                   multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}
                 />
+              </div>
+            )}
+
+            {writable && fc.visible && (meta.type as number) === 11 && (
+              <div style={{ marginTop: 8 }}>
+                <div className="hint-text" style={{ marginBottom: 4 }}>
+                  候选人员来源（可选）：引用其他数据表的某个人员类字段；单元格含多人时自动拆分为多个候选。
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <Select
+                    style={{ minWidth: 150, flex: 1 }}
+                    filter
+                    placeholder="来源数据表"
+                    value={fc.peopleSource?.tableId || undefined}
+                    optionList={sourceTables.map((t) => ({
+                      label: t.id === tableId ? `${t.name}（当前表）` : t.name,
+                      value: t.id,
+                    }))}
+                    onChange={(v) => {
+                      if (typeof v !== 'string') return;
+                      void loadSourceFields(v);
+                      const next: PeopleSource = { tableId: v, fieldId: '' };
+                      patchField(fc.fieldId, { peopleSource: next });
+                    }}
+                  />
+                  <Select
+                    style={{ minWidth: 150, flex: 1 }}
+                    filter
+                    placeholder="来源字段（人员类）"
+                    disabled={!fc.peopleSource?.tableId}
+                    loading={sourceFieldLoading === fc.peopleSource?.tableId}
+                    value={fc.peopleSource?.fieldId || undefined}
+                    optionList={(sourceFields[fc.peopleSource?.tableId || ''] ?? []).map((f) => ({
+                      label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`,
+                      value: f.id,
+                    }))}
+                    onChange={(v) => {
+                      if (typeof v !== 'string' || !fc.peopleSource) return;
+                      const next: PeopleSource = { ...fc.peopleSource, fieldId: v };
+                      patchField(fc.fieldId, { peopleSource: next });
+                    }}
+                  />
+                  {fc.peopleSource && (
+                    <Button
+                      size="small"
+                      theme="borderless"
+                      onClick={() => patchField(fc.fieldId, { peopleSource: undefined })}
+                    >
+                      恢复默认
+                    </Button>
+                  )}
+                </div>
+                <div className="hint-text" style={{ marginTop: 4 }}>
+                  {fc.peopleSource?.tableId
+                    ? '已设置来源：候选人员仅取该来源字段中出现过的人员（不合并本表人员）。'
+                    : '未设置来源：候选人员为本表中已出现过的人员。'}
+                </div>
               </div>
             )}
           </div>

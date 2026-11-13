@@ -10,6 +10,7 @@ import {
   Toast,
 } from '@douyinfe/semi-ui';
 import type { IFieldMeta, IOpenUser } from '@lark-base-open/js-sdk';
+import { findInvalidOptions, optionsFromMeta } from '../utils/options';
 
 interface FieldEditorProps {
   field: IFieldMeta;
@@ -36,7 +37,7 @@ export default function FieldEditor({
   multipleUser = true,
   placeholder,
 }: FieldEditorProps) {
-  const options = getOptions(field);
+  const options = optionsFromMeta(field);
 
   switch (field.type as number) {
     case 2: // Number
@@ -57,14 +58,17 @@ export default function FieldEditor({
         return <div className="hint-text">该字段在多维表格中还没有选项，请先在数据表中添加选项。</div>;
       }
       return (
-        <Select
-          value={typeof value === 'string' && value ? value : undefined}
-          optionList={options.map((o) => ({ label: o, value: o }))}
-          placeholder={placeholder || '请选择选项'}
-          style={{ width: '100%' }}
-          filter
-          onChange={(v) => onChange(typeof v === 'string' ? v : '')}
-        />
+        <>
+          <Select
+            value={typeof value === 'string' && value ? value : undefined}
+            optionList={options.map((o) => ({ label: o.name, value: o.name }))}
+            placeholder={placeholder || '请选择选项'}
+            style={{ width: '100%' }}
+            filter
+            onChange={(v) => onChange(typeof v === 'string' ? v : '')}
+          />
+          <InvalidOptionHint value={value} options={options} multiple={false} />
+        </>
       );
     case 4: {
       // MultiSelect：只能选择该字段在多维表格中已配置的选项
@@ -73,16 +77,19 @@ export default function FieldEditor({
       }
       const selected = Array.isArray(value) ? (value as string[]) : value ? [String(value)] : [];
       return (
-        <Select
-          multiple
-          value={selected}
-          optionList={options.map((o) => ({ label: o, value: o }))}
-          placeholder={placeholder || '请选择选项（可多选）'}
-          style={{ width: '100%' }}
-          filter
-          maxTagCount={3}
-          onChange={(v) => onChange((Array.isArray(v) ? v : v ? [v] : []) as string[])}
-        />
+        <>
+          <Select
+            multiple
+            value={selected}
+            optionList={options.map((o) => ({ label: o.name, value: o.name }))}
+            placeholder={placeholder || '请选择选项（可多选）'}
+            style={{ width: '100%' }}
+            filter
+            maxTagCount={3}
+            onChange={(v) => onChange((Array.isArray(v) ? v : v ? [v] : []) as string[])}
+          />
+          <InvalidOptionHint value={value} options={options} multiple />
+        </>
       );
     }
     case 5: // DateTime
@@ -153,13 +160,23 @@ export default function FieldEditor({
   }
 }
 
-/** 获取单选/多选字段现有选项名 */
-function getOptions(field: IFieldMeta): string[] {
-  if (field.type === 3 || field.type === 4) {
-    const opts = (field.property as { options?: Array<{ name: string }> } | null)?.options;
-    if (Array.isArray(opts)) return opts.map((o) => o.name);
-  }
-  return [];
+/** 已选值不在数据表现有选项中时的提示（提示重选或清空，插件不会自动创建选项） */
+function InvalidOptionHint({
+  value,
+  options,
+  multiple,
+}: {
+  value: unknown;
+  options: Array<{ id: string; name: string }>;
+  multiple: boolean;
+}) {
+  const invalid = findInvalidOptions(value, options, multiple);
+  if (!invalid.length) return null;
+  return (
+    <div className="hint-text" style={{ color: 'var(--semi-color-danger)', marginTop: 4 }}>
+      选项「{invalid.join('、')}」已不在数据表中，请重新选择或清空。
+    </div>
+  );
 }
 
 function buildUserOptions(
@@ -229,6 +246,7 @@ function PersonEditor({ value, options, userById, multiple, onChange }: PersonEd
         multiple={multiple}
         value={multiple ? ids : ids[0]}
         optionList={options}
+        filter
         onChange={(v) => {
           const arr = (Array.isArray(v) ? v : v ? [v] : []) as string[];
           const users = arr

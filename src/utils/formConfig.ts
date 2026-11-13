@@ -6,6 +6,14 @@ import {
 } from '@lark-base-open/js-sdk';
 import { WRITABLE_FIELD_TYPES } from '../constants';
 
+/** 人员字段的候选来源：引用另一张数据表的某个人员类字段（单元格含多人时自动拆分为多个候选） */
+export interface PeopleSource {
+  /** 来源数据表 ID */
+  tableId: string;
+  /** 来源字段 ID（仅限人员类字段：人员 / 创建人 / 修改人） */
+  fieldId: string;
+}
+
 /** 单个字段的表单配置 */
 export interface FormFieldConfig {
   fieldId: string;
@@ -17,12 +25,22 @@ export interface FormFieldConfig {
   readOnly: boolean;
   /** 只读字段的固定值（由管理员配置） */
   fixedValue?: unknown;
+  /**
+   * 人员字段的候选人员来源（仅「人员」字段有效）。
+   * 配置后：候选人员只取该来源字段中出现过的人员；
+   * 未配置：沿用本表已出现过的人员。
+   */
+  peopleSource?: PeopleSource;
 }
 
 /** 一张数据表的表单配置 */
 export interface TableFormConfig {
   /** 是否启用表单填写（关闭后用户看不到表单） */
   enabled: boolean;
+  /** 是否显示「记录筛选修改」模块 */
+  recordUpdateEnabled: boolean;
+  /** 是否显示「Excel 批量导入」模块 */
+  excelImportEnabled: boolean;
   /** 表单标题 */
   title: string;
   /** 表单说明 */
@@ -48,6 +66,9 @@ export async function loadFormConfig(tableId: string): Promise<TableFormConfig |
     if (!data || typeof data !== 'object' || !Array.isArray(data.fields)) return null;
     return {
       enabled: data.enabled !== false,
+      // 历史配置中没有这两个开关，缺省视为显示（保持原有行为）
+      recordUpdateEnabled: data.recordUpdateEnabled !== false,
+      excelImportEnabled: data.excelImportEnabled !== false,
       title: data.title || '表单填写',
       description: data.description || '',
       fields: data.fields,
@@ -92,6 +113,8 @@ export function isWritableField(field: IFieldMeta): boolean {
 export function buildDefaultConfig(fields: IFieldMeta[]): TableFormConfig {
   return {
     enabled: true,
+    recordUpdateEnabled: true,
+    excelImportEnabled: true,
     title: '表单填写',
     description: '',
     fields: fields.map((f) => {

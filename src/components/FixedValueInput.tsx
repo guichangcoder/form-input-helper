@@ -4,8 +4,8 @@ import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { BATCH_SIZE, FIELD_TYPE_LABEL } from '../constants';
 import { convertCellValue } from '../utils/convert';
 import {
-  collectUsersFromTable,
   getCurrentUserId,
+  loadPeopleCandidates,
   writeRecords,
 } from '../utils/sdk';
 import { isWritableField, type FormFieldConfig, type TableFormConfig } from '../utils/formConfig';
@@ -100,17 +100,29 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     [configuredFields],
   );
 
-  // 人员库：本表已出现过的人员 + 当前登录用户
-  const [users, setUsers] = useState<IOpenUser[]>([]);
+  // 人员候选：按「人员」字段分别解析（支持管理员配置的跨表来源）
+  const [usersByField, setUsersByField] = useState<Map<string, IOpenUser[]>>(new Map());
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [scanningUsers, setScanningUsers] = useState(false);
+
+  /** 需要解析候选人员的字段（仅「人员」类型） */
+  const peopleEntries = useMemo(
+    () =>
+      configuredFields
+        .filter((x) => (x.meta.type as number) === 11)
+        .map((x) => ({ fieldId: x.meta.id, source: x.fc?.peopleSource })),
+    [configuredFields],
+  );
 
   const loadUsers = useCallback(async () => {
     if (!table) return;
     setScanningUsers(true);
     try {
-      const [list, uid] = await Promise.all([collectUsersFromTable(table), getCurrentUserId()]);
-      setUsers(list);
+      const [map, uid] = await Promise.all([
+        loadPeopleCandidates(table, peopleEntries),
+        getCurrentUserId(),
+      ]);
+      setUsersByField(map);
       setCurrentUserId(uid);
     } catch (e) {
       console.error('读取人员字段失败', e);
@@ -118,36 +130,18 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     } finally {
       setScanningUsers(false);
     }
-  }, [table]);
+  }, [table, peopleEntries]);
 
   useEffect(() => {
     loadUsers();
   }, [loadUsers]);
 
-  const userOptions = useMemo(() => {
-    const opts: Array<{ label: string; value: string }> = [];
-    const seen = new Set<string>();
-    users.forEach((u) => {
-      if (u.id && !seen.has(u.id)) {
-        seen.add(u.id);
-        opts.push({
-          label: `${u.name || '未命名'}${u.email ? `（${u.email}）` : ''}${u.id === currentUserId ? ' ·当前用户' : ''}`,
-          value: u.id,
-        });
-      }
-    });
-    if (currentUserId && !seen.has(currentUserId)) {
-      opts.push({ label: '当前登录用户（' + currentUserId + '）', value: currentUserId });
-    }
-    return opts;
-  }, [users, currentUserId]);
-
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
-    users.forEach((u) => u.id && m.set(u.id, u));
+    usersByField.forEach((list) => list.forEach((u) => u.id && m.set(u.id, u)));
     if (currentUserId) m.set(currentUserId, { id: currentUserId });
     return m;
-  }, [users, currentUserId]);
+  }, [usersByField, currentUserId]);
 
   const [fixedFields, setFixedFields] = useState<FixedFieldConfig[]>([]);
   const [draft, setDraft] = useState<Record<string, unknown>>({});
@@ -341,7 +335,7 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
         field={field}
         value={value}
         onChange={onChange}
-        users={users}
+        users={usersByField.get(field.id) ?? []}
         currentUserId={currentUserId}
         userById={userById}
         multipleUser={(field.property as { multiple?: boolean } | null)?.multiple !== false}
@@ -381,7 +375,7 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
         <br />
         为固定字段填写一个值后，每条录入记录都会自动带上该值；支持多个固定字段。
         <br />
-        人员字段：从本表已出现的人员中选择（含当前登录用户），也可按 open_id 手动添加。
+        人员字段：从管理员配置的候选人员中选择（默认取本表已出现的人员，含当前登录用户），也可按 open_id 手动添加。
       </div>
 
       {fixedFields.map((fc) => {

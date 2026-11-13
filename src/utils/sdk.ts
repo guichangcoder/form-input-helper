@@ -6,9 +6,21 @@ import {
   type ITable,
 } from '@lark-base-open/js-sdk';
 import { BATCH_SIZE, IMPORTABLE_FIELD_TYPES } from '../constants';
+import {
+  fetchSelectOptions,
+  toMultiSelectCell,
+  toSingleSelectCell,
+  type SelectOption,
+} from './options';
 
 /** 人员字段类型（User / 创建人 / 修改人），用于收集"已在表格中出现过"的人员 */
-const USER_FIELD_TYPES = [11, 1003, 1004];
+export const USER_FIELD_TYPES = [11, 1003, 1004];
+
+/** 人员候选来源（引用另一张数据表的某个人员类字段） */
+export interface PeopleSourceRef {
+  tableId: string;
+  fieldId: string;
+}
 
 /** 当前表上下文 */
 export interface TableContext {
@@ -97,6 +109,29 @@ export async function collectUsersFromTable(
   const userFieldIds = metas
     .filter((f) => USER_FIELD_TYPES.includes(f.type as number))
     .map((f) => f.id);
+  return collectUsersByFieldIds(table, userFieldIds, maxPages);
+}
+
+/**
+ * 收集指定表中「指定人员类字段」已出现过的所有人员，去重。
+ * 单元格内包含多人时按人拆分，逐个作为独立候选。
+ * @param maxPages 最多读取的记录页数上限（每页 500 条），避免大表卡顿
+ */
+export async function collectUsersFromTableField(
+  table: ITable,
+  fieldId: string,
+  maxPages = 10,
+): Promise<IOpenUser[]> {
+  if (!fieldId) return [];
+  return collectUsersByFieldIds(table, [fieldId], maxPages);
+}
+
+/** 扫描表中指定字段的记录值，收集去重后的人员列表 */
+async function collectUsersByFieldIds(
+  table: ITable,
+  userFieldIds: string[],
+  maxPages = 10,
+): Promise<IOpenUser[]> {
   if (!userFieldIds.length) return [];
 
   const users: IOpenUser[] = [];
@@ -125,6 +160,57 @@ export async function collectUsersFromTable(
   return users;
 }
 
+/**
+ * 解析某个「人员」字段的候选人员。
+ * - 未配置来源：本表已出现过的人员（人员/创建人/修改人字段）；
+ * - 配置了来源：只取来源表中该字段出现过的人员；读取失败时回退为本表人员库。
+ */
+export async function getPeopleCandidates(
+  mainTable: ITable,
+  source?: PeopleSourceRef | null,
+): Promise<IOpenUser[]> {
+  if (!source || !source.tableId || !source.fieldId) {
+    return collectUsersFromTable(mainTable);
+  }
+  try {
+    const sourceTable = await bitable.base.getTable(source.tableId);
+    return await collectUsersFromTableField(sourceTable, source.fieldId);
+  } catch (e) {
+    console.error('读取跨表人员来源失败，回退为本表人员库', e);
+    return collectUsersFromTable(mainTable);
+  }
+}
+
+/**
+ * 批量解析表单中各「人员」字段的候选人员：相同 (tableId, fieldId) 只扫描一次。
+ * @returns Map<fieldId, IOpenUser[]>
+ */
+export async function loadPeopleCandidates(
+  mainTable: ITable,
+  entries: Array<{ fieldId: string; source?: PeopleSourceRef | null }>,
+): Promise<Map<string, IOpenUser[]>> {
+  const result = new Map<string, IOpenUser[]>();
+  const cache = new Map<string, Promise<IOpenUser[]>>();
+
+  const resolve = (source?: PeopleSourceRef | null): Promise<IOpenUser[]> => {
+    const key =
+      source && source.tableId && source.fieldId
+        ? `${source.tableId}::${source.fieldId}`
+        : '__self__';
+    let p = cache.get(key);
+    if (!p) {
+      p = getPeopleCandidates(mainTable, source);
+      cache.set(key, p);
+    }
+    return p;
+  };
+
+  for (const e of entries) {
+    result.set(e.fieldId, await resolve(e.source));
+  }
+  return result;
+}
+
 /** 获取当前登录用户 ID */
 export async function getCurrentUserId(): Promise<string | null> {
   try {
@@ -136,6 +222,10 @@ export async function getCurrentUserId(): Promise<string | null> {
 
 /**
  * 批量写入记录。
+ *
+ * 注意：单选/多选字段会先用「数据表现有选项」做白名单校验，再以 { id, text }（多选 [{ id, text }]）
+ * 的形式写入，从而短路 SDK 的选项自动新增逻辑——插件只选择选项，绝不修改数据表的选项配置。
+ *
  * @param records 每条记录为 { [fieldId]: 已转换值 }，值为 undefined 的字段跳过
  * @param onProgress 每批完成后的进度回调
  */
@@ -147,6 +237,8 @@ export async function writeRecords(
 ): Promise<{ success: number; errors: Array<{ index: number; message: string }> }> {
   const errors: Array<{ index: number; message: string }> = [];
   const fieldCache = new Map<string, IField>();
+  const metaCache = new Map<string, IFieldMeta>();
+  const optionCache = new Map<string, SelectOption[]>();
 
   const getField = async (fieldId: string): Promise<IField> => {
     let f = fieldCache.get(fieldId);
@@ -155,6 +247,28 @@ export async function writeRecords(
       fieldCache.set(fieldId, f);
     }
     return f;
+  };
+
+  const getMeta = async (fieldId: string, field: IField): Promise<IFieldMeta> => {
+    let m = metaCache.get(fieldId);
+    if (!m) {
+      m = (await field.getMeta()) as IFieldMeta;
+      metaCache.set(fieldId, m);
+    }
+    return m;
+  };
+
+  const getOptions = async (
+    fieldId: string,
+    field: IField,
+    meta: IFieldMeta,
+  ): Promise<SelectOption[]> => {
+    let opts = optionCache.get(fieldId);
+    if (!opts) {
+      opts = await fetchSelectOptions(field, meta);
+      optionCache.set(fieldId, opts);
+    }
+    return opts;
   };
 
   let success = 0;
@@ -170,6 +284,26 @@ export async function writeRecords(
         if (value === undefined) continue; // 空值跳过
         try {
           const field = await getField(fieldId);
+          const meta = await getMeta(fieldId, field);
+          const type = meta.type as number;
+
+          // 单选/多选：白名单校验 + 传 { id, text } 绕过 SDK 的选项自动新增
+          if (type === 3 || type === 4) {
+            const options = await getOptions(fieldId, field, meta);
+            const resolved =
+              type === 3
+                ? toSingleSelectCell(value, options, meta.name)
+                : toMultiSelectCell(value, options, meta.name);
+            if (!resolved.ok) {
+              errors.push({ index: start + i, message: `字段「${meta.name}」：${resolved.error}` });
+              continue;
+            }
+            if (resolved.skip || resolved.value === undefined) continue;
+            const cell = await field.createCell(resolved.value as never);
+            cells.push(cell);
+            continue;
+          }
+
           const cell = await field.createCell(value as never);
           cells.push(cell);
         } catch (e) {

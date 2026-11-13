@@ -1,6 +1,7 @@
 import type { FieldType, IFieldMeta, IOpenUser } from '@lark-base-open/js-sdk';
-import { CHECKBOX_FALSE, CHECKBOX_TRUE, MULTI_SPLIT_REGEX } from '../constants';
+import { CHECKBOX_FALSE, CHECKBOX_TRUE } from '../constants';
 import { formatDate } from './excel';
+import { extractOptionNames, findOption, optionsFromMeta } from './options';
 
 /** 转换结果 */
 export interface ConvertResult {
@@ -26,10 +27,10 @@ export function convertCellValue(raw: unknown, fieldMeta: IFieldMeta): ConvertRe
     case 99003: // Currency
     case 99004: // Rating
       return convertNumber(raw);
-    case 3: // SingleSelect
-      return { ok: true, value: String(raw) };
-    case 4: // MultiSelect
-      return convertMultiSelect(raw);
+    case 3: // SingleSelect：只能是数据表中已存在的选项
+      return convertSingleSelect(raw, fieldMeta);
+    case 4: // MultiSelect：同上
+      return convertMultiSelect(raw, fieldMeta);
     case 5: // DateTime
       return convertDateTime(raw);
     case 7: // Checkbox
@@ -62,17 +63,35 @@ function convertNumber(raw: unknown): ConvertResult {
   return { ok: true, value: num };
 }
 
-/** 多选：按分隔符拆分、去空、去重 */
-function convertMultiSelect(raw: unknown): ConvertResult {
-  const arr = Array.isArray(raw) ? raw.map((x) => String(x)) : String(raw).split(MULTI_SPLIT_REGEX);
-  const cleaned = arr
-    .map((x) => x.trim())
-    .filter((x) => x.length > 0);
-  const unique = Array.from(new Set(cleaned));
-  if (unique.length === 0) {
-    return { ok: true, skip: true };
+/**
+ * 单选：校验必须命中数据表现有选项，返回选项名（写入时再解析为 { id, text }）。
+ * 未命中直接报错，杜绝「写入时自动新增选项」。
+ */
+function convertSingleSelect(raw: unknown, fieldMeta: IFieldMeta): ConvertResult {
+  const name = String(raw).trim();
+  const options = optionsFromMeta(fieldMeta);
+  if (!options.length) {
+    return { ok: false, error: '该字段在数据表中还没有选项，请先在数据表中添加选项' };
   }
-  return { ok: true, value: unique };
+  if (!findOption(options, name)) {
+    return { ok: false, error: `「${name}」不是数据表中的现有选项（插件不会自动创建选项）` };
+  }
+  return { ok: true, value: name };
+}
+
+/** 多选：每一项都必须命中现有选项，返回选项名数组 */
+function convertMultiSelect(raw: unknown, fieldMeta: IFieldMeta): ConvertResult {
+  const options = optionsFromMeta(fieldMeta);
+  const names = extractOptionNames(raw, options);
+  if (!names.length) return { ok: true, skip: true };
+  if (!options.length) {
+    return { ok: false, error: '该字段在数据表中还没有选项，请先在数据表中添加选项' };
+  }
+  const missing = names.filter((n) => !findOption(options, n));
+  if (missing.length) {
+    return { ok: false, error: `选项「${missing.join('、')}」在数据表中不存在（插件不会自动创建选项）` };
+  }
+  return { ok: true, value: names };
 }
 
 /** 复选框：识别常见的是/否表达 */

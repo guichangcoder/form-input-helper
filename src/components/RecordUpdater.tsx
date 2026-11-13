@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Checkbox, Progress, Radio, RadioGroup, Select, Tag, Toast } from '@douyinfe/semi-ui';
 import { FieldType } from '@lark-base-open/js-sdk';
-import type { IFieldMeta, IOpenUser, IRecord, ITable } from '@lark-base-open/js-sdk';
+import type { IField, IFieldMeta, IOpenUser, IRecord, ITable } from '@lark-base-open/js-sdk';
 import {
   BATCH_SIZE,
   FIELD_TYPE_LABEL,
@@ -9,6 +9,13 @@ import {
   WRITABLE_FIELD_TYPES,
 } from '../constants';
 import { convertCellValue } from '../utils/convert';
+import {
+  fetchSelectOptions,
+  optionsFromMeta,
+  toMultiSelectCell,
+  toSingleSelectCell,
+  type SelectOption,
+} from '../utils/options';
 import { collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
 import {
   cellText,
@@ -238,8 +245,29 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matched, updateFieldIds, mode]);
 
+  /**
+   * 转换后的值再按单选/多选规范化为 { id, text }（多选 [{ id, text }]）。
+   * 这样写入时 SDK 不会进入选项自动新增逻辑——插件只选择选项，绝不修改数据表选项配置。
+   */
+  const finalizeValue = (
+    fieldId: string,
+    meta: IFieldMeta,
+    value: unknown,
+    selectOptions: Map<string, SelectOption[]>,
+  ): { ok: true; skip?: boolean; value?: unknown } | { ok: false; error: string } => {
+    const type = meta.type as number;
+    if (type !== 3 && type !== 4) return { ok: true, value };
+    const options = selectOptions.get(fieldId) ?? optionsFromMeta(meta);
+    return type === 3
+      ? toSingleSelectCell(value, options, meta.name)
+      : toMultiSelectCell(value, options, meta.name);
+  };
+
   /** 构建单条记录的新字段值（row 模式） */
-  const buildRowFields = (rec: IRecord): { fields: Record<string, unknown>; errors: string[] } => {
+  const buildRowFields = (
+    rec: IRecord,
+    selectOptions: Map<string, SelectOption[]>,
+  ): { fields: Record<string, unknown>; errors: string[] } => {
     const fieldsOut: Record<string, unknown> = {};
     const errors: string[] = [];
     const recDraft = rowDrafts[rec.recordId];
@@ -253,14 +281,26 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
         return;
       }
       const res = convertCellValue(d.rawValue, meta);
-      if (res.ok && !res.skip) fieldsOut[fid] = res.value;
-      else if (!res.ok) errors.push(`${meta.name}：${res.error}`);
+      if (!res.ok) {
+        errors.push(`${meta.name}：${res.error}`);
+        return;
+      }
+      if (res.skip) return;
+      const fin = finalizeValue(fid, meta, res.value, selectOptions);
+      if (!fin.ok) {
+        errors.push(`${meta.name}：${fin.error}`);
+        return;
+      }
+      if (fin.skip || fin.value === undefined) return;
+      fieldsOut[fid] = fin.value;
     });
     return { fields: fieldsOut, errors };
   };
 
   /** 构建统一修改的单条记录新字段值 */
-  const buildBulkFields = (): { fields: Record<string, unknown>; errors: string[] } => {
+  const buildBulkFields = (
+    selectOptions: Map<string, SelectOption[]>,
+  ): { fields: Record<string, unknown>; errors: string[] } => {
     const fieldsOut: Record<string, unknown> = {};
     const errors: string[] = [];
     updateFieldIds.forEach((fid) => {
@@ -273,8 +313,18 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
         return;
       }
       const res = convertCellValue(d.rawValue, meta);
-      if (res.ok && !res.skip) fieldsOut[fid] = res.value;
-      else if (!res.ok) errors.push(`${meta.name}：${res.error}`);
+      if (!res.ok) {
+        errors.push(`${meta.name}：${res.error}`);
+        return;
+      }
+      if (res.skip) return;
+      const fin = finalizeValue(fid, meta, res.value, selectOptions);
+      if (!fin.ok) {
+        errors.push(`${meta.name}：${fin.error}`);
+        return;
+      }
+      if (fin.skip || fin.value === undefined) return;
+      fieldsOut[fid] = fin.value;
     });
     return { fields: fieldsOut, errors };
   };
@@ -312,14 +362,28 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     try {
       const allErrors: Array<{ index: number; message: string }> = [];
       const payloads: Array<{ recordId: string; fields: Record<string, unknown> }> = [];
+
+      // 写入前实时读取单选/多选字段的现有选项（避免使用打开插件时的缓存）
+      const selectOptions = new Map<string, SelectOption[]>();
+      for (const fid of updateFieldIds) {
+        const meta = fieldById.get(fid);
+        if (!meta || (meta.type !== 3 && meta.type !== 4)) continue;
+        try {
+          const field = await table.getField<IField>(fid);
+          selectOptions.set(fid, await fetchSelectOptions(field, meta));
+        } catch (e) {
+          console.warn('读取字段选项失败', e);
+        }
+      }
+
       if (mode === 'row') {
         matched.forEach((rec, idx) => {
-          const { fields: f, errors } = buildRowFields(rec);
+          const { fields: f, errors } = buildRowFields(rec, selectOptions);
           errors.forEach((m) => allErrors.push({ index: idx, message: m }));
           payloads.push({ recordId: rec.recordId, fields: f });
         });
       } else {
-        const { fields: f, errors } = buildBulkFields();
+        const { fields: f, errors } = buildBulkFields(selectOptions);
         errors.forEach((m) => allErrors.push({ index: -1, message: m }));
         if (!Object.keys(f).length) {
           Toast.warning('没有可更新的字段（请填写新值或勾选清空）');
