@@ -23,6 +23,11 @@ interface FieldEditorProps {
   userById?: Map<string, IOpenUser>;
   /** 是否允许人员多选（跟随字段属性） */
   multipleUser?: boolean;
+  /**
+   * 单选/多选字段的候选选项名覆盖（管理员配置了跨表来源时传入）。
+   * undefined = 使用字段自身选项；数组 = 只展示这些选项（可能为空）。
+   */
+  optionNames?: string[];
   placeholder?: string;
 }
 
@@ -35,9 +40,15 @@ export default function FieldEditor({
   currentUserId,
   userById,
   multipleUser = true,
+  optionNames,
   placeholder,
 }: FieldEditorProps) {
   const options = optionsFromMeta(field);
+  const overridden = Array.isArray(optionNames);
+  const optionList = (overridden ? optionNames! : options.map((o) => o.name)).map((name) => ({
+    label: name,
+    value: name,
+  }));
 
   switch (field.type as number) {
     case 2: // Number
@@ -53,15 +64,21 @@ export default function FieldEditor({
           placeholder={placeholder || '请输入数字'}
         />
       );
-    case 3: // SingleSelect：只能选择该字段在多维表格中已配置的选项
-      if (!options.length) {
-        return <div className="hint-text">该字段在多维表格中还没有选项，请先在数据表中添加选项。</div>;
+    case 3: // SingleSelect：只能选择候选选项（管理员配置了来源时取交集）
+      if (!optionList.length) {
+        return (
+          <div className="hint-text">
+            {overridden
+              ? '来源条件未匹配到本字段已有的选项，请调整来源条件或先在本字段添加选项。'
+              : '该字段在多维表格中还没有选项，请先在数据表中添加选项。'}
+          </div>
+        );
       }
       return (
         <>
           <Select
             value={typeof value === 'string' && value ? value : undefined}
-            optionList={options.map((o) => ({ label: o.name, value: o.name }))}
+            optionList={optionList}
             placeholder={placeholder || '请选择选项'}
             style={{ width: '100%' }}
             filter
@@ -71,9 +88,15 @@ export default function FieldEditor({
         </>
       );
     case 4: {
-      // MultiSelect：只能选择该字段在多维表格中已配置的选项
-      if (!options.length) {
-        return <div className="hint-text">该字段在多维表格中还没有选项，请先在数据表中添加选项。</div>;
+      // MultiSelect：只能选择候选选项（管理员配置了来源时取交集）
+      if (!optionList.length) {
+        return (
+          <div className="hint-text">
+            {overridden
+              ? '来源条件未匹配到本字段已有的选项，请调整来源条件或先在本字段添加选项。'
+              : '该字段在多维表格中还没有选项，请先在数据表中添加选项。'}
+          </div>
+        );
       }
       const selected = Array.isArray(value) ? (value as string[]) : value ? [String(value)] : [];
       return (
@@ -81,7 +104,7 @@ export default function FieldEditor({
           <Select
             multiple
             value={selected}
-            optionList={options.map((o) => ({ label: o.name, value: o.name }))}
+            optionList={optionList}
             placeholder={placeholder || '请选择选项（可多选）'}
             style={{ width: '100%' }}
             filter

@@ -5,6 +5,7 @@ import { convertCellValue } from '../utils/convert';
 import { describeError } from '../utils/errors';
 import {
   getCurrentUserId,
+  loadOptionCandidates,
   loadPeopleCandidates,
   writeRecords,
 } from '../utils/sdk';
@@ -38,8 +39,9 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     [config.fields, fieldById],
   );
 
-  // 人员候选：按「人员」字段分别解析（支持管理员配置的跨表来源）
+  // 人员候选 / 选项候选：按字段分别解析（支持管理员配置的跨表来源 + 筛选条件）
   const [usersByField, setUsersByField] = useState<Map<string, IOpenUser[]>>(new Map());
+  const [optionNamesByField, setOptionNamesByField] = useState<Map<string, string[]>>(new Map());
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   /** 需要解析候选人员的字段（仅「人员」类型） */
@@ -51,20 +53,37 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     [config.fields, fieldById],
   );
 
+  /** 需要解析候选选项的字段（单选/多选，且配置了跨表来源） */
+  const optionEntries = useMemo(
+    () =>
+      config.fields.flatMap((fc) => {
+        const meta = fieldById.get(fc.fieldId);
+        if (!meta || ![3, 4].includes(meta.type as number)) return [];
+        if (!fc.optionSource?.tableId || !fc.optionSource?.fieldId) return [];
+        return [{ fieldId: fc.fieldId, field: meta, source: fc.optionSource }];
+      }),
+    [config.fields, fieldById],
+  );
+
   useEffect(() => {
     if (!table) return;
     let cancelled = false;
-    Promise.all([loadPeopleCandidates(table, peopleEntries), getCurrentUserId()])
-      .then(([map, uid]) => {
+    Promise.all([
+      loadPeopleCandidates(table, peopleEntries),
+      loadOptionCandidates(optionEntries),
+      getCurrentUserId(),
+    ])
+      .then(([users, options, uid]) => {
         if (cancelled) return;
-        setUsersByField(map);
+        setUsersByField(users);
+        setOptionNamesByField(options);
         setCurrentUserId(uid);
       })
-      .catch((e) => console.error('读取人员字段失败', e));
+      .catch((e) => console.error('读取人员/选项来源失败', e));
     return () => {
       cancelled = true;
     };
-  }, [table, peopleEntries]);
+  }, [table, peopleEntries, optionEntries]);
 
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
@@ -204,6 +223,7 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
                   value={draft[meta.id]}
                   onChange={(v) => setValue(meta.id, v)}
                   users={usersByField.get(meta.id) ?? []}
+                  optionNames={optionNamesByField.get(meta.id)}
                   currentUserId={currentUserId}
                   userById={userById}
                   multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}

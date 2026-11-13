@@ -4,25 +4,255 @@ import { bitable, type IFieldMeta, type IOpenUser, type ITable } from '@lark-bas
 import { FIELD_TYPE_LABEL } from '../constants';
 import { describeError } from '../utils/errors';
 import { findInvalidOptions, optionsFromMeta } from '../utils/options';
-import { USER_FIELD_TYPES, collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
 import {
+  OPTION_FIELD_TYPES,
+  USER_FIELD_TYPES,
+  collectUsersFromTable,
+  getCurrentUserId,
+} from '../utils/sdk';
+import {
+  CONDITION_OPERATOR_LABEL,
   buildDefaultConfig,
   isWritableField,
   mergeConfigWithFields,
   saveFormConfig,
+  type ConditionOperator,
   type FormFieldConfig,
-  type PeopleSource,
+  type SourceCondition,
   type TableFormConfig,
+  type ValueSource,
 } from '../utils/formConfig';
 import FieldEditor from './FieldEditor';
 
 /** 配置体积参考上限（KB）：插件存储单 key 携带的数据量有限，超出可能导致保存失败 */
 const CONFIG_SIZE_LIMIT_KB = 100;
 
+/** 单个来源引用最多允许的筛选条件条数 */
+const MAX_CONDITIONS = 5;
+
+/** 条件操作符下拉项 */
+const OPERATOR_OPTIONS = (Object.keys(CONDITION_OPERATOR_LABEL) as ConditionOperator[]).map(
+  (op) => ({ label: CONDITION_OPERATOR_LABEL[op], value: op }),
+);
+
+/** 无比较值的操作符 */
+function operatorNeedsValue(op: ConditionOperator): boolean {
+  return op !== 'empty' && op !== 'notEmpty';
+}
+
 /** 字节数格式化 */
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+/** 条件比较值编辑器：按条件字段类型渲染 */
+function ConditionValueInput({
+  field,
+  value,
+  onChange,
+}: {
+  field?: IFieldMeta;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const type = field?.type as number | undefined;
+  if (field && (type === 3 || type === 4)) {
+    return (
+      <Select
+        style={{ minWidth: 120, flex: 1 }}
+        filter
+        placeholder="选项值"
+        value={value || undefined}
+        optionList={optionsFromMeta(field).map((o) => ({ label: o.name, value: o.name }))}
+        onChange={(v) => onChange(typeof v === 'string' ? v : '')}
+      />
+    );
+  }
+  if (type === 7) {
+    return (
+      <Select
+        style={{ minWidth: 120, flex: 1 }}
+        placeholder="是 / 否"
+        value={value || undefined}
+        optionList={[
+          { label: '是', value: '是' },
+          { label: '否', value: '否' },
+        ]}
+        onChange={(v) => onChange(typeof v === 'string' ? v : '')}
+      />
+    );
+  }
+  return (
+    <Input
+      style={{ minWidth: 120, flex: 1 }}
+      value={value}
+      placeholder={type === 11 ? '姓名或 open_id' : '比较值'}
+      onChange={onChange}
+    />
+  );
+}
+
+interface SourcePickerProps {
+  /** 功能说明 */
+  hint: string;
+  /** 可选来源数据表 */
+  tables: Array<{ id: string; name: string }>;
+  currentTableId: string;
+  /** tableId -> 该表全部字段 */
+  fieldsByTable: Record<string, IFieldMeta[]>;
+  /** 正在加载字段的表 ID */
+  loadingTableId: string | null;
+  /** 需要某张表的字段时回调（带缓存） */
+  onNeedFields: (tableId: string) => void;
+  /** 允许作为来源字段的类型过滤 */
+  sourceFieldFilter: (f: IFieldMeta) => boolean;
+  sourceFieldPlaceholder: string;
+  source?: ValueSource;
+  onChange: (next: ValueSource | undefined) => void;
+}
+
+/** 跨表来源配置：来源数据表 + 来源字段 + 可选筛选条件（多条 AND） */
+function SourcePicker({
+  hint,
+  tables,
+  currentTableId,
+  fieldsByTable,
+  loadingTableId,
+  onNeedFields,
+  sourceFieldFilter,
+  sourceFieldPlaceholder,
+  source,
+  onChange,
+}: SourcePickerProps) {
+  const tableFields = source?.tableId ? fieldsByTable[source.tableId] ?? [] : [];
+  const fieldById = useMemo(() => {
+    const m = new Map<string, IFieldMeta>();
+    tableFields.forEach((f) => m.set(f.id, f));
+    return m;
+  }, [tableFields]);
+  const conditions = source?.conditions ?? [];
+
+  const patch = (p: Partial<ValueSource>) => {
+    if (source) onChange({ ...source, ...p });
+  };
+
+  const setCondition = (idx: number, p: Partial<SourceCondition>) => {
+    patch({ conditions: conditions.map((c, i) => (i === idx ? { ...c, ...p } : c)) });
+  };
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div className="hint-text" style={{ marginBottom: 4 }}>
+        {hint}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <Select
+          style={{ minWidth: 150, flex: 1 }}
+          filter
+          placeholder="来源数据表"
+          value={source?.tableId || undefined}
+          optionList={tables.map((t) => ({
+            label: t.id === currentTableId ? `${t.name}（当前表）` : t.name,
+            value: t.id,
+          }))}
+          onChange={(v) => {
+            if (typeof v !== 'string') return;
+            onNeedFields(v);
+            onChange({ tableId: v, fieldId: '' });
+          }}
+        />
+        <Select
+          style={{ minWidth: 150, flex: 1 }}
+          filter
+          placeholder={sourceFieldPlaceholder}
+          disabled={!source?.tableId}
+          loading={loadingTableId === source?.tableId}
+          value={source?.fieldId || undefined}
+          optionList={tableFields.filter(sourceFieldFilter).map((f) => ({
+            label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`,
+            value: f.id,
+          }))}
+          onChange={(v) => {
+            if (typeof v === 'string') patch({ fieldId: v });
+          }}
+        />
+        {source && (
+          <Button size="small" theme="borderless" onClick={() => onChange(undefined)}>
+            恢复默认
+          </Button>
+        )}
+      </div>
+
+      {source?.tableId && (
+        <div style={{ marginTop: 6 }}>
+          <div className="hint-text" style={{ marginBottom: 4 }}>
+            筛选条件（可选，多条之间为「且」，全部满足才纳入候选）：
+          </div>
+          {conditions.map((c, i) => (
+            <div
+              key={`${c.fieldId}-${i}`}
+              style={{ display: 'flex', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}
+            >
+              <Select
+                style={{ minWidth: 130, flex: 1 }}
+                filter
+                placeholder="条件字段"
+                value={c.fieldId || undefined}
+                optionList={tableFields.map((f) => ({ label: f.name, value: f.id }))}
+                onChange={(v) => {
+                  if (typeof v === 'string') setCondition(i, { fieldId: v, value: '' });
+                }}
+              />
+              <Select
+                style={{ minWidth: 96 }}
+                value={c.operator}
+                optionList={OPERATOR_OPTIONS}
+                onChange={(v) => {
+                  if (typeof v === 'string') setCondition(i, { operator: v as ConditionOperator });
+                }}
+              />
+              {operatorNeedsValue(c.operator) && (
+                <ConditionValueInput
+                  field={fieldById.get(c.fieldId)}
+                  value={c.value ?? ''}
+                  onChange={(v) => setCondition(i, { value: v })}
+                />
+              )}
+              <Button
+                size="small"
+                theme="borderless"
+                onClick={() =>
+                  patch({
+                    conditions: (() => {
+                      const next = conditions.filter((_, idx) => idx !== i);
+                      return next.length ? next : undefined;
+                    })(),
+                  })
+                }
+              >
+                删除
+              </Button>
+            </div>
+          ))}
+          {conditions.length < MAX_CONDITIONS ? (
+            <Button
+              size="small"
+              onClick={() =>
+                patch({
+                  conditions: [...conditions, { fieldId: '', operator: 'eq' as ConditionOperator, value: '' }],
+                })
+              }
+            >
+              + 添加条件
+            </Button>
+          ) : (
+            <span className="hint-text">最多 {MAX_CONDITIONS} 条条件</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface FormConfigPanelProps {
@@ -97,10 +327,10 @@ export default function FormConfigPanel({
     return m;
   }, [users, currentUserId]);
 
-  // 「候选人员来源」：可选来源数据表，及其人员类字段
+  // 跨表来源：可选来源数据表 + 各表字段（人员/选项来源与筛选条件共用）
   const [sourceTables, setSourceTables] = useState<Array<{ id: string; name: string }>>([]);
-  /** tableId -> 该表的人员类字段 */
-  const [sourceFields, setSourceFields] = useState<Record<string, IFieldMeta[]>>({});
+  /** tableId -> 该表全部字段 */
+  const [sourceFieldMap, setSourceFieldMap] = useState<Record<string, IFieldMeta[]>>({});
   const [sourceFieldLoading, setSourceFieldLoading] = useState<string | null>(null);
 
   useEffect(() => {
@@ -120,15 +350,14 @@ export default function FormConfigPanel({
     };
   }, []);
 
-  /** 加载来源表的人员类字段（按 tableId 缓存） */
+  /** 加载来源表的全部字段（按 tableId 缓存） */
   const loadSourceFields = async (sourceTableId: string) => {
-    if (!sourceTableId || sourceFields[sourceTableId]) return;
+    if (!sourceTableId || sourceFieldMap[sourceTableId]) return;
     setSourceFieldLoading(sourceTableId);
     try {
       const t = await bitable.base.getTable(sourceTableId);
       const metas = (await t.getFieldMetaList()) ?? [];
-      const people = metas.filter((f) => USER_FIELD_TYPES.includes(f.type as number));
-      setSourceFields((m) => ({ ...m, [sourceTableId]: people }));
+      setSourceFieldMap((m) => ({ ...m, [sourceTableId]: metas }));
     } catch (e) {
       console.error('读取来源表字段失败', e);
       Toast.error(describeError(e, '读取来源表字段失败，请确认你对来源表有访问权限'));
@@ -137,11 +366,12 @@ export default function FormConfigPanel({
     }
   };
 
-  /** 配置中已引用到的来源表，进入页面时预加载其人员类字段 */
+  /** 配置中已引用到的来源表，进入页面时预加载其字段 */
   useEffect(() => {
     const ids = new Set<string>();
     local.fields.forEach((fc) => {
       if (fc.peopleSource?.tableId) ids.add(fc.peopleSource.tableId);
+      if (fc.optionSource?.tableId) ids.add(fc.optionSource.tableId);
     });
     ids.forEach((id) => {
       void loadSourceFields(id);
@@ -203,13 +433,26 @@ export default function FormConfigPanel({
       return;
     }
     const problems = validateFixedValues(local);
+    /** 校验单个跨表来源：数据表/来源字段成对，且每条条件完整 */
+    const checkSource = (meta: IFieldMeta, source: ValueSource | undefined, label: string) => {
+      if (!source) return;
+      if (!source.tableId || !source.fieldId) {
+        problems.push(`字段「${meta.name}」已配置${label}，请同时指定来源数据表与来源字段`);
+        return;
+      }
+      (source.conditions ?? []).forEach((c, i) => {
+        if (!c.fieldId) {
+          problems.push(`字段「${meta.name}」的${label}条件 ${i + 1} 未选择条件字段`);
+        } else if (operatorNeedsValue(c.operator) && !String(c.value ?? '').trim()) {
+          problems.push(`字段「${meta.name}」的${label}条件 ${i + 1} 缺少比较值`);
+        }
+      });
+    };
     local.fields.forEach((fc) => {
-      if (!fc.peopleSource) return;
       const meta = fieldById.get(fc.fieldId);
       if (!meta) return;
-      if (!fc.peopleSource.tableId || !fc.peopleSource.fieldId) {
-        problems.push(`字段「${meta.name}」已选择候选人员来源，请同时指定来源数据表与来源字段`);
-      }
+      checkSource(meta, fc.peopleSource, '候选人员来源');
+      checkSource(meta, fc.optionSource, '候选选项来源');
     });
     if (problems.length) {
       Toast.error(problems.join('；'));
@@ -429,60 +672,47 @@ export default function FormConfigPanel({
             )}
 
             {writable && fc.visible && (meta.type as number) === 11 && (
-              <div style={{ marginTop: 8 }}>
-                <div className="hint-text" style={{ marginBottom: 4 }}>
-                  候选人员来源（可选）：引用其他数据表的某个人员类字段；单元格含多人时自动拆分为多个候选。
-                </div>
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                  <Select
-                    style={{ minWidth: 150, flex: 1 }}
-                    filter
-                    placeholder="来源数据表"
-                    value={fc.peopleSource?.tableId || undefined}
-                    optionList={sourceTables.map((t) => ({
-                      label: t.id === tableId ? `${t.name}（当前表）` : t.name,
-                      value: t.id,
-                    }))}
-                    onChange={(v) => {
-                      if (typeof v !== 'string') return;
-                      void loadSourceFields(v);
-                      const next: PeopleSource = { tableId: v, fieldId: '' };
-                      patchField(fc.fieldId, { peopleSource: next });
-                    }}
-                  />
-                  <Select
-                    style={{ minWidth: 150, flex: 1 }}
-                    filter
-                    placeholder="来源字段（人员类）"
-                    disabled={!fc.peopleSource?.tableId}
-                    loading={sourceFieldLoading === fc.peopleSource?.tableId}
-                    value={fc.peopleSource?.fieldId || undefined}
-                    optionList={(sourceFields[fc.peopleSource?.tableId || ''] ?? []).map((f) => ({
-                      label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`,
-                      value: f.id,
-                    }))}
-                    onChange={(v) => {
-                      if (typeof v !== 'string' || !fc.peopleSource) return;
-                      const next: PeopleSource = { ...fc.peopleSource, fieldId: v };
-                      patchField(fc.fieldId, { peopleSource: next });
-                    }}
-                  />
-                  {fc.peopleSource && (
-                    <Button
-                      size="small"
-                      theme="borderless"
-                      onClick={() => patchField(fc.fieldId, { peopleSource: undefined })}
-                    >
-                      恢复默认
-                    </Button>
-                  )}
-                </div>
+              <>
+                <SourcePicker
+                  hint="候选人员来源（可选）：引用其他数据表的某个人员类字段；单元格含多人时自动拆分为多个候选。"
+                  tables={sourceTables}
+                  currentTableId={tableId}
+                  fieldsByTable={sourceFieldMap}
+                  loadingTableId={sourceFieldLoading}
+                  onNeedFields={loadSourceFields}
+                  sourceFieldFilter={(f) => USER_FIELD_TYPES.includes(f.type as number)}
+                  sourceFieldPlaceholder="来源字段（人员类）"
+                  source={fc.peopleSource}
+                  onChange={(next) => patchField(fc.fieldId, { peopleSource: next })}
+                />
                 <div className="hint-text" style={{ marginTop: 4 }}>
                   {fc.peopleSource?.tableId
-                    ? '已设置来源：候选人员仅取该来源字段中出现过的人员（不合并本表人员）。'
+                    ? '已设置来源：候选人员仅取该来源字段中满足条件的人员（不合并本表人员）。'
                     : '未设置来源：候选人员为本表中已出现过的人员。'}
                 </div>
-              </div>
+              </>
+            )}
+
+            {writable && fc.visible && OPTION_FIELD_TYPES.includes(meta.type as number) && (
+              <>
+                <SourcePicker
+                  hint="候选选项来源（可选）：引用其他数据表的某个单选/多选字段；候选选项 = 本字段已有选项与来源值的交集（不会新增或修改本字段选项）。"
+                  tables={sourceTables}
+                  currentTableId={tableId}
+                  fieldsByTable={sourceFieldMap}
+                  loadingTableId={sourceFieldLoading}
+                  onNeedFields={loadSourceFields}
+                  sourceFieldFilter={(f) => OPTION_FIELD_TYPES.includes(f.type as number)}
+                  sourceFieldPlaceholder="来源字段（单选/多选）"
+                  source={fc.optionSource}
+                  onChange={(next) => patchField(fc.fieldId, { optionSource: next })}
+                />
+                <div className="hint-text" style={{ marginTop: 4 }}>
+                  {fc.optionSource?.tableId
+                    ? '已设置来源：候选选项仅展示「本字段已有选项」中出现在该来源里的值。'
+                    : '未设置来源：候选选项为本字段在数据表中已有的全部选项。'}
+                </div>
+              </>
             )}
           </div>
         );

@@ -6,13 +6,40 @@ import {
 } from '@lark-base-open/js-sdk';
 import { WRITABLE_FIELD_TYPES } from '../constants';
 
-/** 人员字段的候选来源：引用另一张数据表的某个人员类字段（单元格含多人时自动拆分为多个候选） */
-export interface PeopleSource {
+/** 来源筛选条件的操作符 */
+export type ConditionOperator = 'eq' | 'ne' | 'contains' | 'notContains' | 'empty' | 'notEmpty';
+
+/** 条件操作符显示名 */
+export const CONDITION_OPERATOR_LABEL: Record<ConditionOperator, string> = {
+  eq: '等于',
+  ne: '不等于',
+  contains: '包含',
+  notContains: '不包含',
+  empty: '为空',
+  notEmpty: '不为空',
+};
+
+/** 来源筛选条件：筛选来源表中满足条件的记录（多条之间为「且」，全部满足才纳入候选） */
+export interface SourceCondition {
+  /** 来源数据表中的字段 ID */
+  fieldId: string;
+  operator: ConditionOperator;
+  /** 比较值（「为空 / 不为空」无需填写） */
+  value?: string;
+}
+
+/** 跨表来源引用：引用某数据表某字段的内容作为候选 */
+export interface ValueSource {
   /** 来源数据表 ID */
   tableId: string;
-  /** 来源字段 ID（仅限人员类字段：人员 / 创建人 / 修改人） */
+  /** 来源字段 ID（人员字段：人员类字段；选项字段：单选/多选字段） */
   fieldId: string;
+  /** 筛选条件（可选） */
+  conditions?: SourceCondition[];
 }
+
+/** 兼容旧命名 */
+export type PeopleSource = ValueSource;
 
 /** 单个字段的表单配置 */
 export interface FormFieldConfig {
@@ -27,10 +54,16 @@ export interface FormFieldConfig {
   fixedValue?: unknown;
   /**
    * 人员字段的候选人员来源（仅「人员」字段有效）。
-   * 配置后：候选人员只取该来源字段中出现过的人员；
+   * 配置后：候选人员只取该来源字段中出现过（且满足条件）的人员；
    * 未配置：沿用本表已出现过的人员。
    */
-  peopleSource?: PeopleSource;
+  peopleSource?: ValueSource;
+  /**
+   * 单选/多选字段的候选选项来源（仅单选/多选字段有效）。
+   * 配置后：候选为本字段现有选项与来源字段值（满足条件）的**交集**（插件不会新增选项）；
+   * 未配置：沿用本字段在数据表中已有的选项。
+   */
+  optionSource?: ValueSource;
 }
 
 /** 一张数据表的表单配置 */

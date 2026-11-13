@@ -5,6 +5,7 @@ import { BATCH_SIZE, FIELD_TYPE_LABEL } from '../constants';
 import { convertCellValue } from '../utils/convert';
 import {
   getCurrentUserId,
+  loadOptionCandidates,
   loadPeopleCandidates,
   writeRecords,
 } from '../utils/sdk';
@@ -100,8 +101,9 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     [configuredFields],
   );
 
-  // 人员候选：按「人员」字段分别解析（支持管理员配置的跨表来源）
+  // 人员候选 / 选项候选：按字段分别解析（支持管理员配置的跨表来源 + 筛选条件）
   const [usersByField, setUsersByField] = useState<Map<string, IOpenUser[]>>(new Map());
+  const [optionNamesByField, setOptionNamesByField] = useState<Map<string, string[]>>(new Map());
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [scanningUsers, setScanningUsers] = useState(false);
 
@@ -114,23 +116,36 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     [configuredFields],
   );
 
+  /** 需要解析候选选项的字段（单选/多选，且配置了跨表来源） */
+  const optionEntries = useMemo(
+    () =>
+      configuredFields.flatMap((x) => {
+        if (![3, 4].includes(x.meta.type as number)) return [];
+        if (!x.fc?.optionSource?.tableId || !x.fc?.optionSource?.fieldId) return [];
+        return [{ fieldId: x.meta.id, field: x.meta, source: x.fc.optionSource }];
+      }),
+    [configuredFields],
+  );
+
   const loadUsers = useCallback(async () => {
     if (!table) return;
     setScanningUsers(true);
     try {
-      const [map, uid] = await Promise.all([
+      const [users, options, uid] = await Promise.all([
         loadPeopleCandidates(table, peopleEntries),
+        loadOptionCandidates(optionEntries),
         getCurrentUserId(),
       ]);
-      setUsersByField(map);
+      setUsersByField(users);
+      setOptionNamesByField(options);
       setCurrentUserId(uid);
     } catch (e) {
-      console.error('读取人员字段失败', e);
-      Toast.error(describeError(e, '读取人员字段失败，请刷新重试'));
+      console.error('读取人员/选项来源失败', e);
+      Toast.error(describeError(e, '读取人员/选项来源失败，请刷新重试'));
     } finally {
       setScanningUsers(false);
     }
-  }, [table, peopleEntries]);
+  }, [table, peopleEntries, optionEntries]);
 
   useEffect(() => {
     loadUsers();
@@ -336,6 +351,7 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
         value={value}
         onChange={onChange}
         users={usersByField.get(field.id) ?? []}
+        optionNames={optionNamesByField.get(field.id)}
         currentUserId={currentUserId}
         userById={userById}
         multipleUser={(field.property as { multiple?: boolean } | null)?.multiple !== false}
