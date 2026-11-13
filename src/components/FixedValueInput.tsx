@@ -391,7 +391,7 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
         <br />
         为固定字段填写一个值后，每条录入记录都会自动带上该值；支持多个固定字段。
         <br />
-        人员字段：从管理员配置的候选人员中选择（默认取本表已出现的人员，含当前登录用户），也可按 open_id 手动添加。
+        人员字段：从管理员配置的候选人员中选择（默认取本表已出现的人员，含当前登录用户）。
       </div>
 
       {fixedFields.map((fc) => {

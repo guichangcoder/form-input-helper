@@ -1,14 +1,5 @@
-import React, { useState } from 'react';
-import {
-  Button,
-  Checkbox,
-  DatePicker,
-  Input,
-  InputNumber,
-  Select,
-  Tag,
-  Toast,
-} from '@douyinfe/semi-ui';
+import React from 'react';
+import { Checkbox, DatePicker, Input, InputNumber, Select, Tag } from '@douyinfe/semi-ui';
 import type { IFieldMeta, IOpenUser } from '@lark-base-open/js-sdk';
 import { findInvalidOptions, optionsFromMeta } from '../utils/options';
 
@@ -231,33 +222,10 @@ interface PersonEditorProps {
   onChange: (v: IOpenUser[]) => void;
 }
 
-/** 人员字段编辑器：从人员库选择（可多选）+ 按 open_id 手动添加兜底 */
+/** 人员字段编辑器：从候选人员库中选择（可多选） */
 function PersonEditor({ value, options, userById, multiple, onChange }: PersonEditorProps) {
-  const [oidText, setOidText] = useState('');
   const current = Array.isArray(value) ? value.filter((u) => u && u.id) : [];
   const ids = current.map((u) => u.id!);
-
-  const addByOid = () => {
-    const newIds = oidText
-      .split(/[,，\s]+/)
-      .map((s) => s.trim())
-      .filter((s) => /^ou_[0-9a-zA-Z]+$/.test(s));
-    if (!newIds.length) {
-      Toast.warning('请输入以 ou_ 开头的 open_id（多个用逗号分隔）');
-      return;
-    }
-    const merged = [...current];
-    const seen = new Set(merged.map((u) => u.id));
-    newIds.forEach((id) => {
-      if (!seen.has(id)) {
-        seen.add(id);
-        merged.push({ id });
-      }
-    });
-    onChange(merged);
-    setOidText('');
-    Toast.success(`已添加 ${newIds.length} 个人员`);
-  };
 
   const removeUser = (id: string) => {
     onChange(current.filter((u) => u.id !== id));
@@ -281,17 +249,6 @@ function PersonEditor({ value, options, userById, multiple, onChange }: PersonEd
         style={{ width: '100%' }}
         maxTagCount={3}
       />
-      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-        <Input
-          size="small"
-          value={oidText}
-          onChange={setOidText}
-          placeholder="目标人员不在列表？输入 open_id（ou_开头，可逗号分隔多个）"
-        />
-        <Button size="small" onClick={addByOid}>
-          添加
-        </Button>
-      </div>
       {current.length > 0 && (
         <div style={{ marginTop: 4 }}>
           {current.map((u) => (
