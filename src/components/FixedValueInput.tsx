@@ -4,12 +4,20 @@ import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { BATCH_SIZE, FIELD_TYPE_LABEL } from '../constants';
 import { convertCellValue } from '../utils/convert';
 import {
+  buildDynamicValues,
+  dynamicValuesKey,
   getCurrentUserId,
   loadOptionCandidates,
   loadPeopleCandidates,
+  sourceDynamicFieldIds,
   writeRecords,
 } from '../utils/sdk';
-import { isWritableField, type FormFieldConfig, type TableFormConfig } from '../utils/formConfig';
+import {
+  isWritableField,
+  type FormFieldConfig,
+  type TableFormConfig,
+  type ValueSource,
+} from '../utils/formConfig';
 import FieldEditor from './FieldEditor';
 import { describeError } from '../utils/errors';
 
@@ -127,30 +135,6 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     [configuredFields],
   );
 
-  const loadUsers = useCallback(async () => {
-    if (!table) return;
-    setScanningUsers(true);
-    try {
-      const [users, options, uid] = await Promise.all([
-        loadPeopleCandidates(table, peopleEntries),
-        loadOptionCandidates(optionEntries),
-        getCurrentUserId(),
-      ]);
-      setUsersByField(users);
-      setOptionNamesByField(options);
-      setCurrentUserId(uid);
-    } catch (e) {
-      console.error('读取人员/选项来源失败', e);
-      Toast.error(describeError(e, '读取人员/选项来源失败，请刷新重试'));
-    } finally {
-      setScanningUsers(false);
-    }
-  }, [table, peopleEntries, optionEntries]);
-
-  useEffect(() => {
-    loadUsers();
-  }, [loadUsers]);
-
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
     usersByField.forEach((list) => list.forEach((u) => u.id && m.set(u.id, u)));
@@ -165,6 +149,90 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [result, setResult] = useState<{ success: number; errors: Array<{ index: number; message: string }> } | null>(null);
+
+  /** 条件中被引用的「当前表单字段」：这些字段的值变化时需要重算候选 */
+  const dynamicFieldIds = useMemo(() => {
+    const ids = new Set<string>();
+    configuredFields.forEach(({ fc }) => {
+      sourceDynamicFieldIds(fc?.peopleSource).forEach((id) => ids.add(id));
+      sourceDynamicFieldIds(fc?.optionSource).forEach((id) => ids.add(id));
+    });
+    return [...ids];
+  }, [configuredFields]);
+
+  /** 当前录入行的字段值快照：固定值 + 管理员锁定固定值 + 草稿（草稿优先） */
+  const rowValues = useMemo(() => {
+    const m: Record<string, unknown> = {};
+    fixedFields.forEach((f) => {
+      m[f.fieldId] = f.rawValue;
+    });
+    lockedFields.forEach(({ meta, fc }) => {
+      if (fc?.fixedValue !== undefined) m[meta.id] = fc.fixedValue;
+    });
+    Object.assign(m, draft);
+    return m;
+  }, [fixedFields, lockedFields, draft]);
+
+  const dynamicKey = useMemo(
+    () => dynamicValuesKey(buildDynamicValues(rowValues, dynamicFieldIds), dynamicFieldIds),
+    [rowValues, dynamicFieldIds],
+  );
+  const dynamic = useMemo(
+    () => buildDynamicValues(rowValues, dynamicFieldIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dynamicKey],
+  );
+
+  const loadUsers = useCallback(async () => {
+    if (!table) return;
+    setScanningUsers(true);
+    try {
+      const [users, options, uid] = await Promise.all([
+        loadPeopleCandidates(table, peopleEntries, dynamic),
+        loadOptionCandidates(optionEntries, dynamic),
+        getCurrentUserId(),
+      ]);
+      setUsersByField(users);
+      setOptionNamesByField(options);
+      setCurrentUserId(uid);
+    } catch (e) {
+      console.error('读取人员/选项来源失败', e);
+      Toast.error(describeError(e, '读取人员/选项来源失败，请刷新重试'));
+    } finally {
+      setScanningUsers(false);
+    }
+  }, [table, peopleEntries, optionEntries, dynamic]);
+
+  useEffect(() => {
+    // 动态条件依赖当前录入行，做轻量防抖避免每次输入都全表扫描
+    const timer = setTimeout(loadUsers, dynamicFieldIds.length ? 250 : 0);
+    return () => clearTimeout(timer);
+  }, [loadUsers, dynamicFieldIds.length]);
+
+  /** 动态条件引用的表单字段尚未填写时的提示（此时候选为空） */
+  const pendingDynamicHint = useCallback(
+    (source?: ValueSource | null): string | null => {
+      const ids = sourceDynamicFieldIds(source);
+      if (!ids.length) return null;
+      const missing = ids.filter((id) => !(dynamic[id] ?? []).length);
+      if (!missing.length) return null;
+      const names = missing.map((id) => fieldById.get(id)?.name || '引用字段').join('、');
+      return `请先填写「${names}」后再选择。`;
+    },
+    [dynamic, fieldById],
+  );
+
+  /** 按字段取动态条件提示 */
+  const pendingHintForField = useCallback(
+    (fieldId: string): string | null => {
+      const hit = configuredFields.find((x) => x.meta.id === fieldId);
+      if (!hit) return null;
+      const source =
+        (hit.meta.type as number) === 11 ? hit.fc?.peopleSource : hit.fc?.optionSource;
+      return pendingDynamicHint(source);
+    },
+    [configuredFields, pendingDynamicHint],
+  );
 
   /** 供录入的字段 = 支持字段 - 已选固定字段 */
   const editableFields = useMemo(
@@ -345,17 +413,25 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     value: unknown,
     onChange: (v: unknown) => void,
   ) => {
+    const hint = pendingHintForField(field.id);
     return (
-      <FieldEditor
-        field={field}
-        value={value}
-        onChange={onChange}
-        users={usersByField.get(field.id) ?? []}
-        optionNames={optionNamesByField.get(field.id)}
-        currentUserId={currentUserId}
-        userById={userById}
-        multipleUser={(field.property as { multiple?: boolean } | null)?.multiple !== false}
-      />
+      <>
+        {hint && (
+          <div className="hint-text" style={{ marginBottom: 4 }}>
+            {hint}
+          </div>
+        )}
+        <FieldEditor
+          field={field}
+          value={value}
+          onChange={onChange}
+          users={usersByField.get(field.id) ?? []}
+          optionNames={optionNamesByField.get(field.id)}
+          currentUserId={currentUserId}
+          userById={userById}
+          multipleUser={(field.property as { multiple?: boolean } | null)?.multiple !== false}
+        />
+      </>
     );
   };
 
@@ -382,7 +458,7 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
           loading={scanningUsers}
           disabled={importing}
         >
-          刷新人员
+          刷新候选
         </Button>
       </div>
       <div className="hint-text" style={{ marginBottom: 8 }}>
@@ -392,6 +468,8 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
         为固定字段填写一个值后，每条录入记录都会自动带上该值；支持多个固定字段。
         <br />
         人员字段：从管理员配置的候选人员中选择（默认取本表已出现的人员，含当前登录用户）。
+        <br />
+        若字段配置了「引用表单字段」的筛选条件，候选项会随当前录入行所填内容动态刷新。
       </div>
 
       {fixedFields.map((fc) => {

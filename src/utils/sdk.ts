@@ -21,6 +21,34 @@ export const USER_FIELD_TYPES = [11, 1003, 1004];
 /** 单选 / 多选字段类型 */
 export const OPTION_FIELD_TYPES = [3, 4];
 
+/** 当前表单已填值：fieldId -> 归一化后的文本数组（用于条件中的动态比较值） */
+export type DynamicValues = Record<string, string[]>;
+
+/** 取来源条件中引用的「当前表单字段」ID 列表（用于监听这些字段的变化并重算候选） */
+export function sourceDynamicFieldIds(source?: ValueSource | null): string[] {
+  if (!source) return [];
+  const ids = new Set<string>();
+  (source.conditions ?? []).forEach((c) => {
+    if (c?.valueFromFieldId) ids.add(c.valueFromFieldId);
+  });
+  return [...ids];
+}
+
+/** 从表单草稿值构建动态比较值（fieldId -> 归一化文本数组，只取用到的字段） */
+export function buildDynamicValues(
+  draft: Record<string, unknown>,
+  fieldIds: Iterable<string>,
+): DynamicValues {
+  const out: DynamicValues = {};
+  for (const id of fieldIds) out[id] = cellToTexts(draft[id]);
+  return out;
+}
+
+/** 动态值快照字符串（用于判断是否需要重算候选） */
+export function dynamicValuesKey(dynamic: DynamicValues, fieldIds: string[]): string {
+  return fieldIds.map((id) => `${id}=${(dynamic[id] ?? []).join('|')}`).join('&');
+}
+
 /** 当前表上下文 */
 export interface TableContext {
   table: ITable;
@@ -108,23 +136,25 @@ export async function collectUsersFromTable(
   const userFieldIds = metas
     .filter((f) => USER_FIELD_TYPES.includes(f.type as number))
     .map((f) => f.id);
-  return collectUsersByFieldIds(table, userFieldIds, undefined, maxPages);
+  return collectUsersByFieldIds(table, userFieldIds, undefined, undefined, maxPages);
 }
 
 /**
  * 收集指定表中「指定人员类字段」已出现过的所有人员，去重。
  * 单元格内包含多人时按人拆分，逐个作为独立候选。
  * @param conditions 来源表记录的筛选条件（多条 AND），不传=不过滤
+ * @param dynamic 当前表单已填值（fieldId -> 文本数组），用于解析条件中的动态比较值
  * @param maxPages 最多读取的记录页数上限（每页 500 条），避免大表卡顿
  */
 export async function collectUsersFromTableField(
   table: ITable,
   fieldId: string,
   conditions?: SourceCondition[],
+  dynamic?: DynamicValues,
   maxPages = 10,
 ): Promise<IOpenUser[]> {
   if (!fieldId) return [];
-  return collectUsersByFieldIds(table, [fieldId], conditions, maxPages);
+  return collectUsersByFieldIds(table, [fieldId], conditions, dynamic, maxPages);
 }
 
 /** 扫描表中指定字段的记录值，收集去重后的人员列表 */
@@ -132,6 +162,7 @@ async function collectUsersByFieldIds(
   table: ITable,
   userFieldIds: string[],
   conditions?: SourceCondition[],
+  dynamic?: DynamicValues,
   maxPages = 10,
 ): Promise<IOpenUser[]> {
   if (!userFieldIds.length) return [];
@@ -140,7 +171,7 @@ async function collectUsersByFieldIds(
   const seen = new Set<string>();
 
   await forEachRecord(table, maxPages, (fields) => {
-    if (!matchConditions(fields, conditions)) return;
+    if (!matchConditions(fields, conditions, dynamic)) return;
     for (const fid of userFieldIds) {
       const v = fields[fid];
       if (!Array.isArray(v)) continue;
@@ -165,6 +196,7 @@ export async function collectOptionsFromTableField(
   table: ITable,
   fieldId: string,
   conditions?: SourceCondition[],
+  dynamic?: DynamicValues,
   maxPages = 10,
 ): Promise<string[]> {
   if (!fieldId) return [];
@@ -173,7 +205,7 @@ export async function collectOptionsFromTableField(
   const seen = new Set<string>();
 
   await forEachRecord(table, maxPages, (fields) => {
-    if (!matchConditions(fields, conditions)) return;
+    if (!matchConditions(fields, conditions, dynamic)) return;
     cellToTexts(fields[fieldId]).forEach((t) => {
       if (t && !seen.has(t)) {
         seen.add(t);
@@ -218,41 +250,74 @@ function cellToTexts(v: unknown): string[] {
   return [String(v)];
 }
 
-/** 判断一条记录是否满足全部筛选条件（AND） */
+/**
+ * 解析条件的比较目标值。
+ * - 配置了 valueFromFieldId：取当前表单该字段已填内容（可多值）；未填则视为「无目标值」；
+ * - 否则取固定值（trim 后非空才算一个目标值）。
+ * 返回 null 表示该条件无法比较（动态值缺失），此时条件不成立。
+ */
+function resolveConditionTargets(
+  c: SourceCondition,
+  dynamic?: DynamicValues,
+): string[] | null {
+  if (c.valueFromFieldId) {
+    const vals = (dynamic?.[c.valueFromFieldId] ?? [])
+      .map((t) => t.trim())
+      .filter(Boolean);
+    return vals.length ? vals : null;
+  }
+  const target = (c.value ?? '').trim();
+  return target ? [target] : [];
+}
+
+/**
+ * 判断一条记录是否满足全部筛选条件（AND）。
+ * @param dynamic 当前表单已填值，用于解析条件中引用的表单字段（为空则条件视为不成立）
+ */
 function matchConditions(
   fields: Record<string, unknown>,
   conditions?: SourceCondition[],
+  dynamic?: DynamicValues,
 ): boolean {
   if (!conditions || !conditions.length) return true;
   return conditions
     .filter((c) => c && c.fieldId)
     .every((c) => {
       const texts = cellToTexts(fields[c.fieldId]);
-      const target = (c.value ?? '').trim();
+      // 「为空 / 不为空」只判断来源字段本身，与比较值无关
+      if (c.operator === 'empty') return texts.length === 0;
+      if (c.operator === 'notEmpty') return texts.length > 0;
+
+      const targets = resolveConditionTargets(c, dynamic);
+      if (targets === null) return false; // 动态比较值未填 → 条件不成立
+      if (!targets.length) return true; // 固定值未填 → 按未设置处理
       switch (c.operator) {
-        case 'empty':
-          return texts.length === 0;
-        case 'notEmpty':
-          return texts.length > 0;
         case 'eq':
-          return texts.includes(target);
+          return texts.some((t) => targets.includes(t));
         case 'ne':
-          return !texts.includes(target);
+          return !texts.some((t) => targets.includes(t));
         case 'contains':
-          return Boolean(target) && texts.some((t) => t.includes(target));
+          return texts.some((t) => targets.some((g) => t.includes(g)));
         case 'notContains':
-          return Boolean(target) && !texts.some((t) => t.includes(target));
+          return !texts.some((t) => targets.some((g) => t.includes(g)));
         default:
           return true;
       }
     });
 }
 
-/** 来源引用的缓存键（同表同字段同条件只扫描一次） */
-function sourceCacheKey(source: ValueSource): string {
+/**
+ * 来源引用的缓存键（同表同字段同条件同动态值只扫描一次）。
+ * 动态条件的取值快照纳入键中，避免不同表单取值命中同一缓存。
+ */
+function sourceCacheKey(source: ValueSource, dynamic?: DynamicValues): string {
   const conds = (source.conditions ?? [])
     .filter((c) => c && c.fieldId)
-    .map((c) => `${c.fieldId}:${c.operator}:${c.value ?? ''}`)
+    .map((c) =>
+      c.valueFromFieldId
+        ? `${c.fieldId}:${c.operator}:@${c.valueFromFieldId}=${(dynamic?.[c.valueFromFieldId] ?? []).join('|')}`
+        : `${c.fieldId}:${c.operator}:${c.value ?? ''}`,
+    )
     .join(',');
   return `${source.tableId}::${source.fieldId}::${conds}`;
 }
@@ -265,13 +330,14 @@ function sourceCacheKey(source: ValueSource): string {
 export async function getPeopleCandidates(
   mainTable: ITable,
   source?: ValueSource | null,
+  dynamic?: DynamicValues,
 ): Promise<IOpenUser[]> {
   if (!source || !source.tableId || !source.fieldId) {
     return collectUsersFromTable(mainTable);
   }
   try {
     const sourceTable = await bitable.base.getTable(source.tableId);
-    return await collectUsersFromTableField(sourceTable, source.fieldId, source.conditions);
+    return await collectUsersFromTableField(sourceTable, source.fieldId, source.conditions, dynamic);
   } catch (e) {
     console.error('读取跨表人员来源失败，回退为本表人员库', e);
     return collectUsersFromTable(mainTable);
@@ -279,21 +345,23 @@ export async function getPeopleCandidates(
 }
 
 /**
- * 批量解析表单中各「人员」字段的候选人员：相同来源 + 条件只扫描一次。
+ * 批量解析表单中各「人员」字段的候选人员：相同来源 + 条件 + 动态值只扫描一次。
  * @returns Map<fieldId, IOpenUser[]>
  */
 export async function loadPeopleCandidates(
   mainTable: ITable,
   entries: Array<{ fieldId: string; source?: ValueSource | null }>,
+  dynamic?: DynamicValues,
 ): Promise<Map<string, IOpenUser[]>> {
   const result = new Map<string, IOpenUser[]>();
   const cache = new Map<string, Promise<IOpenUser[]>>();
 
   const resolve = (source?: ValueSource | null): Promise<IOpenUser[]> => {
-    const key = source && source.tableId && source.fieldId ? sourceCacheKey(source) : '__self__';
+    const key =
+      source && source.tableId && source.fieldId ? sourceCacheKey(source, dynamic) : '__self__';
     let p = cache.get(key);
     if (!p) {
-      p = getPeopleCandidates(mainTable, source);
+      p = getPeopleCandidates(mainTable, source, dynamic);
       cache.set(key, p);
     }
     return p;
@@ -312,18 +380,24 @@ export async function loadPeopleCandidates(
  */
 export async function loadOptionCandidates(
   entries: Array<{ fieldId: string; field: IFieldMeta; source?: ValueSource | null }>,
+  dynamic?: DynamicValues,
 ): Promise<Map<string, string[]>> {
   const result = new Map<string, string[]>();
   const cache = new Map<string, Promise<string[]>>();
 
   for (const e of entries) {
     if (!e.source || !e.source.tableId || !e.source.fieldId) continue;
-    const key = sourceCacheKey(e.source);
+    const key = sourceCacheKey(e.source, dynamic);
     let p = cache.get(key);
     if (!p) {
       p = (async () => {
         const sourceTable = await bitable.base.getTable(e.source!.tableId);
-        return collectOptionsFromTableField(sourceTable, e.source!.fieldId, e.source!.conditions);
+        return collectOptionsFromTableField(
+          sourceTable,
+          e.source!.fieldId,
+          e.source!.conditions,
+          dynamic,
+        );
       })();
       cache.set(key, p);
     }

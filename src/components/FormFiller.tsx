@@ -4,12 +4,15 @@ import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { convertCellValue } from '../utils/convert';
 import { describeError } from '../utils/errors';
 import {
+  buildDynamicValues,
+  dynamicValuesKey,
   getCurrentUserId,
   loadOptionCandidates,
   loadPeopleCandidates,
+  sourceDynamicFieldIds,
   writeRecords,
 } from '../utils/sdk';
-import type { TableFormConfig } from '../utils/formConfig';
+import type { TableFormConfig, ValueSource } from '../utils/formConfig';
 import { isWritableField } from '../utils/formConfig';
 import FieldEditor from './FieldEditor';
 
@@ -65,25 +68,67 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     [config.fields, fieldById],
   );
 
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(0);
+
+  /** 条件中被引用的「当前表单字段」：这些字段的值变化时需要重算候选 */
+  const dynamicFieldIds = useMemo(() => {
+    const ids = new Set<string>();
+    config.fields.forEach((fc) => {
+      sourceDynamicFieldIds(fc.peopleSource).forEach((id) => ids.add(id));
+      sourceDynamicFieldIds(fc.optionSource).forEach((id) => ids.add(id));
+    });
+    return [...ids];
+  }, [config.fields]);
+
+  /** 动态比较值快照（仅在取值变化时更新，避免无关输入触发重算） */
+  const dynamicKey = useMemo(
+    () => dynamicValuesKey(buildDynamicValues(draft, dynamicFieldIds), dynamicFieldIds),
+    [draft, dynamicFieldIds],
+  );
+  const dynamic = useMemo(
+    () => buildDynamicValues(draft, dynamicFieldIds),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [dynamicKey],
+  );
+
   useEffect(() => {
     if (!table) return;
     let cancelled = false;
-    Promise.all([
-      loadPeopleCandidates(table, peopleEntries),
-      loadOptionCandidates(optionEntries),
-      getCurrentUserId(),
-    ])
-      .then(([users, options, uid]) => {
-        if (cancelled) return;
-        setUsersByField(users);
-        setOptionNamesByField(options);
-        setCurrentUserId(uid);
-      })
-      .catch((e) => console.error('读取人员/选项来源失败', e));
+    // 动态条件依赖表单输入，做轻量防抖避免每次输入都全表扫描
+    const timer = setTimeout(() => {
+      Promise.all([
+        loadPeopleCandidates(table, peopleEntries, dynamic),
+        loadOptionCandidates(optionEntries, dynamic),
+        getCurrentUserId(),
+      ])
+        .then(([users, options, uid]) => {
+          if (cancelled) return;
+          setUsersByField(users);
+          setOptionNamesByField(options);
+          setCurrentUserId(uid);
+        })
+        .catch((e) => console.error('读取人员/选项来源失败', e));
+    }, dynamicFieldIds.length ? 250 : 0);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
-  }, [table, peopleEntries, optionEntries]);
+  }, [table, peopleEntries, optionEntries, dynamic, dynamicFieldIds.length]);
+
+  /** 动态条件引用的表单字段尚未填写时的提示（此时候选为空） */
+  const pendingDynamicHint = useCallback(
+    (source?: ValueSource | null): string | null => {
+      const ids = sourceDynamicFieldIds(source);
+      if (!ids.length) return null;
+      const missing = ids.filter((id) => !(dynamic[id] ?? []).length);
+      if (!missing.length) return null;
+      const names = missing.map((id) => fieldById.get(id)?.name || '引用字段').join('、');
+      return `请先填写「${names}」后再选择。`;
+    },
+    [dynamic, fieldById],
+  );
 
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
@@ -91,10 +136,6 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     if (currentUserId) m.set(currentUserId, { id: currentUserId });
     return m;
   }, [usersByField, currentUserId]);
-
-  const [draft, setDraft] = useState<Record<string, unknown>>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(0);
 
   // 管理员更新配置后清空未提交的内容
   useEffect(() => {
@@ -191,6 +232,11 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
       {visibleFields.map(({ fc, meta }) => {
         const writable = isWritableField(meta);
         const readOnly = !writable || fc.readOnly;
+        const pending = readOnly
+          ? null
+          : pendingDynamicHint(
+              (meta.type as number) === 11 ? fc.peopleSource : fc.optionSource,
+            );
         return (
           <div key={meta.id} className="form-field">
             <div className="form-field-label" title={meta.name}>
@@ -211,6 +257,11 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
               )}
             </div>
             <div className="form-field-control">
+              {pending && (
+                <div className="hint-text" style={{ marginBottom: 4 }}>
+                  {pending}
+                </div>
+              )}
               {readOnly ? (
                 <div className="form-readonly-value">
                   {writable

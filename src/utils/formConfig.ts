@@ -24,8 +24,13 @@ export interface SourceCondition {
   /** 来源数据表中的字段 ID */
   fieldId: string;
   operator: ConditionOperator;
-  /** 比较值（「为空 / 不为空」无需填写） */
+  /** 比较值（「为空 / 不为空」无需填写）；配置了 valueFromFieldId 时忽略 */
   value?: string;
+  /**
+   * 动态比较值：取「当前表单中该字段已填的内容」作为比较值（表单填写 / 固定值录入的当前行）。
+   * 配置后在填写时动态重算候选；该字段为空时候选为空。
+   */
+  valueFromFieldId?: string;
 }
 
 /** 跨表来源引用：引用某数据表某字段的内容作为候选 */

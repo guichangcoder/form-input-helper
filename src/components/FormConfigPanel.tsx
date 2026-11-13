@@ -108,6 +108,10 @@ interface SourcePickerProps {
   /** 允许作为来源字段的类型过滤 */
   sourceFieldFilter: (f: IFieldMeta) => boolean;
   sourceFieldPlaceholder: string;
+  /** 当前表单（当前数据表）的字段：可用于「比较值 = 表单已填字段内容」 */
+  formFields: IFieldMeta[];
+  /** 排除的字段（正在配置的字段自身，避免自引用） */
+  excludeFieldId?: string;
   source?: ValueSource;
   onChange: (next: ValueSource | undefined) => void;
 }
@@ -122,6 +126,8 @@ function SourcePicker({
   onNeedFields,
   sourceFieldFilter,
   sourceFieldPlaceholder,
+  formFields,
+  excludeFieldId,
   source,
   onChange,
 }: SourcePickerProps) {
@@ -132,6 +138,18 @@ function SourcePicker({
     return m;
   }, [tableFields]);
   const conditions = source?.conditions ?? [];
+
+  /** 可作为动态比较值的表单字段（排除正在配置的字段自身） */
+  const formFieldOptions = useMemo(
+    () =>
+      formFields
+        .filter((f) => f.id !== excludeFieldId)
+        .map((f) => ({
+          label: `${f.name}（${FIELD_TYPE_LABEL[f.type as number] ?? f.type}）`,
+          value: f.id,
+        })),
+    [formFields, excludeFieldId],
+  );
 
   const patch = (p: Partial<ValueSource>) => {
     if (source) onChange({ ...source, ...p });
@@ -187,7 +205,7 @@ function SourcePicker({
       {source?.tableId && (
         <div style={{ marginTop: 6 }}>
           <div className="hint-text" style={{ marginBottom: 4 }}>
-            筛选条件（可选，多条之间为「且」，全部满足才纳入候选）：
+            筛选条件（可选，多条之间为「且」，全部满足才纳入候选）：比较值可选固定值，或取「当前表单中已填字段」的内容（填写时动态生效；该字段为空时候选为空）。
           </div>
           {conditions.map((c, i) => (
             <div
@@ -213,11 +231,44 @@ function SourcePicker({
                 }}
               />
               {operatorNeedsValue(c.operator) && (
-                <ConditionValueInput
-                  field={fieldById.get(c.fieldId)}
-                  value={c.value ?? ''}
-                  onChange={(v) => setCondition(i, { value: v })}
-                />
+                <>
+                  <Select
+                    style={{ minWidth: 104 }}
+                    value={c.valueFromFieldId !== undefined ? 'field' : 'fixed'}
+                    optionList={[
+                      { label: '固定值', value: 'fixed' },
+                      { label: '表单字段', value: 'field' },
+                    ]}
+                    onChange={(v) => {
+                      if (v === 'field') {
+                        setCondition(i, {
+                          valueFromFieldId: c.valueFromFieldId || formFieldOptions[0]?.value || '',
+                          value: undefined,
+                        });
+                      } else {
+                        setCondition(i, { valueFromFieldId: undefined, value: '' });
+                      }
+                    }}
+                  />
+                  {c.valueFromFieldId !== undefined ? (
+                    <Select
+                      style={{ minWidth: 130, flex: 1 }}
+                      filter
+                      placeholder="取该表单字段已填内容"
+                      value={c.valueFromFieldId || undefined}
+                      optionList={formFieldOptions}
+                      onChange={(v) => {
+                        if (typeof v === 'string') setCondition(i, { valueFromFieldId: v });
+                      }}
+                    />
+                  ) : (
+                    <ConditionValueInput
+                      field={fieldById.get(c.fieldId)}
+                      value={c.value ?? ''}
+                      onChange={(v) => setCondition(i, { value: v })}
+                    />
+                  )}
+                </>
               )}
               <Button
                 size="small"
@@ -443,7 +494,14 @@ export default function FormConfigPanel({
       (source.conditions ?? []).forEach((c, i) => {
         if (!c.fieldId) {
           problems.push(`字段「${meta.name}」的${label}条件 ${i + 1} 未选择条件字段`);
-        } else if (operatorNeedsValue(c.operator) && !String(c.value ?? '').trim()) {
+          return;
+        }
+        if (!operatorNeedsValue(c.operator)) return;
+        if (c.valueFromFieldId !== undefined) {
+          if (!c.valueFromFieldId) {
+            problems.push(`字段「${meta.name}」的${label}条件 ${i + 1} 未选择要引用的表单字段`);
+          }
+        } else if (!String(c.value ?? '').trim()) {
           problems.push(`字段「${meta.name}」的${label}条件 ${i + 1} 缺少比较值`);
         }
       });
@@ -682,6 +740,8 @@ export default function FormConfigPanel({
                   onNeedFields={loadSourceFields}
                   sourceFieldFilter={(f) => USER_FIELD_TYPES.includes(f.type as number)}
                   sourceFieldPlaceholder="来源字段（人员类）"
+                  formFields={fields}
+                  excludeFieldId={fc.fieldId}
                   source={fc.peopleSource}
                   onChange={(next) => patchField(fc.fieldId, { peopleSource: next })}
                 />
@@ -704,6 +764,8 @@ export default function FormConfigPanel({
                   onNeedFields={loadSourceFields}
                   sourceFieldFilter={(f) => OPTION_FIELD_TYPES.includes(f.type as number)}
                   sourceFieldPlaceholder="来源字段（单选/多选）"
+                  formFields={fields}
+                  excludeFieldId={fc.fieldId}
                   source={fc.optionSource}
                   onChange={(next) => patchField(fc.fieldId, { optionSource: next })}
                 />
