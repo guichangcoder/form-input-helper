@@ -41,6 +41,9 @@ export function convertCellValue(raw: unknown, fieldMeta: IFieldMeta): ConvertRe
       return { ok: true, value: String(raw) };
     case 11: // User（人员）：值须为 {id} 结构，来自人员库选择或 open_id 手动输入
       return convertUser(raw);
+    case 18: // SingleLink（单向关联）
+    case 21: // DuplexLink（双向关联）
+      return convertLink(raw, fieldMeta);
     default:
       return { ok: false, error: `暂不支持字段类型「${fieldMeta.type}」` };
   }
@@ -183,6 +186,38 @@ function convertUser(raw: unknown): ConvertResult {
     return { ok: false, error: '未识别到有效人员（请从人员列表选择，或输入以 ou_ 开头的 open_id）' };
   }
   return { ok: true, value: users };
+}
+
+/**
+ * 关联字段：接受 记录 ID / 记录 ID 数组 / 关联单元格（含 recordIds）。
+ * 输出 SDK 可写的关联单元格结构，并自动去重。
+ */
+function convertLink(raw: unknown, fieldMeta: IFieldMeta): ConvertResult {
+  const tableId = (fieldMeta.property as { tableId?: string } | null)?.tableId ?? '';
+  if (!tableId) {
+    return { ok: false, error: '该关联字段未指向有效的数据表' };
+  }
+
+  const ids: string[] = [];
+  const push = (x: unknown) => {
+    if (x && typeof x === 'object') {
+      const o = x as { recordIds?: unknown; record_ids?: unknown; id?: unknown };
+      const nested = o.recordIds ?? o.record_ids;
+      if (Array.isArray(nested)) {
+        nested.forEach(push);
+        return;
+      }
+      if (typeof o.id === 'string') push(o.id);
+      return;
+    }
+    const s = String(x ?? '').trim();
+    if (s && !ids.includes(s)) ids.push(s);
+  };
+  if (Array.isArray(raw)) raw.forEach(push);
+  else push(raw);
+
+  if (!ids.length) return { ok: false, error: '请选择要关联的记录' };
+  return { ok: true, value: { type: 'text', text: '', recordIds: ids, tableId } };
 }
 
 function isEmpty(raw: unknown): boolean {

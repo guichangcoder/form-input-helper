@@ -7,10 +7,12 @@ import {
   buildDynamicValues,
   dynamicValuesKey,
   getCurrentUserId,
+  loadLinkCandidates,
   loadOptionCandidates,
   loadPeopleCandidates,
   sourceDynamicFieldIds,
   writeRecords,
+  type LinkOption,
 } from '../utils/sdk';
 import type { TableFormConfig, ValueSource } from '../utils/formConfig';
 import { isWritableField } from '../utils/formConfig';
@@ -42,9 +44,12 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     [config.fields, fieldById],
   );
 
-  // 人员候选 / 选项候选：按字段分别解析（支持管理员配置的跨表来源 + 筛选条件）
+  // 人员候选 / 选项候选 / 关联记录候选：按字段分别解析（支持管理员配置的跨表来源 + 筛选条件）
   const [usersByField, setUsersByField] = useState<Map<string, IOpenUser[]>>(new Map());
   const [optionNamesByField, setOptionNamesByField] = useState<Map<string, string[]>>(new Map());
+  const [linkOptionsByField, setLinkOptionsByField] = useState<Map<string, LinkOption[]>>(
+    new Map(),
+  );
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
 
   /** 需要解析候选人员的字段（仅「人员」类型） */
@@ -64,6 +69,17 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
         if (!meta || ![3, 4].includes(meta.type as number)) return [];
         if (!fc.optionSource?.tableId || !fc.optionSource?.fieldId) return [];
         return [{ fieldId: fc.fieldId, field: meta, source: fc.optionSource }];
+      }),
+    [config.fields, fieldById],
+  );
+
+  /** 需要解析候选记录的字段（关联字段，候选取关联表的记录） */
+  const linkEntries = useMemo(
+    () =>
+      config.fields.flatMap((fc) => {
+        const meta = fieldById.get(fc.fieldId);
+        if (!meta || ![18, 21].includes(meta.type as number)) return [];
+        return [{ fieldId: fc.fieldId, field: meta }];
       }),
     [config.fields, fieldById],
   );
@@ -116,6 +132,19 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
       clearTimeout(timer);
     };
   }, [table, peopleEntries, optionEntries, dynamic, dynamicFieldIds.length]);
+
+  // 关联表的记录不随表单输入变化，单独读取一次
+  useEffect(() => {
+    let cancelled = false;
+    loadLinkCandidates(linkEntries)
+      .then((links) => {
+        if (!cancelled) setLinkOptionsByField(links);
+      })
+      .catch((e) => console.error('读取关联表记录失败', e));
+    return () => {
+      cancelled = true;
+    };
+  }, [linkEntries]);
 
   /** 动态条件引用的表单字段尚未填写时的提示（此时候选为空） */
   const pendingDynamicHint = useCallback(
@@ -265,7 +294,7 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
               {readOnly ? (
                 <div className="form-readonly-value">
                   {writable
-                    ? displayText(meta, fc.fixedValue) || '（未设置）'
+                    ? displayText(meta, fc.fixedValue, linkOptionsByField.get(meta.id)) || '（未设置）'
                     : '（该字段不支持在此表单中填写）'}
                 </div>
               ) : (
@@ -275,6 +304,7 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
                   onChange={(v) => setValue(meta.id, v)}
                   users={usersByField.get(meta.id) ?? []}
                   optionNames={optionNamesByField.get(meta.id)}
+                  linkOptions={linkOptionsByField.get(meta.id)}
                   currentUserId={currentUserId}
                   userById={userById}
                   multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}
@@ -305,15 +335,22 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
 }
 
 /** 只读字段的展示文本 */
-function displayText(meta: IFieldMeta, raw: unknown): string {
+function displayText(meta: IFieldMeta, raw: unknown, links?: LinkOption[]): string {
   if (raw === undefined || raw === null || raw === '') return '';
   if (Array.isArray(raw)) {
+    const byId = links ? new Map(links.map((l) => [l.id, l.label])) : null;
     return raw
-      .map((x) =>
-        x && typeof x === 'object'
-          ? (x as IOpenUser).name || (x as IOpenUser).email || (x as IOpenUser).id || ''
-          : String(x),
-      )
+      .map((x) => {
+        if (x && typeof x === 'object') {
+          const o = x as IOpenUser & { recordIds?: string[]; text?: string };
+          if (Array.isArray(o.recordIds)) {
+            return o.text || `${o.recordIds.length} 条关联记录`;
+          }
+          return o.name || o.email || o.id || '';
+        }
+        const id = String(x);
+        return byId?.get(id) ?? id;
+      })
       .filter(Boolean)
       .join('、');
   }

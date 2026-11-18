@@ -7,10 +7,12 @@ import {
   buildDynamicValues,
   dynamicValuesKey,
   getCurrentUserId,
+  loadLinkCandidates,
   loadOptionCandidates,
   loadPeopleCandidates,
   sourceDynamicFieldIds,
   writeRecords,
+  type LinkOption,
 } from '../utils/sdk';
 import {
   isWritableField,
@@ -36,15 +38,20 @@ function isLockedField(fc: FormFieldConfig | null, meta: IFieldMeta): boolean {
 }
 
 /** 只读字段的展示文本 */
-function readonlyText(meta: IFieldMeta, raw: unknown): string {
+function readonlyText(meta: IFieldMeta, raw: unknown, links?: LinkOption[]): string {
   if (raw === undefined || raw === null || raw === '') return '';
   if (Array.isArray(raw)) {
+    const byId = links ? new Map(links.map((l) => [l.id, l.label])) : null;
     return raw
-      .map((x) =>
-        x && typeof x === 'object'
-          ? (x as IOpenUser).name || (x as IOpenUser).email || (x as IOpenUser).id || ''
-          : String(x),
-      )
+      .map((x) => {
+        if (x && typeof x === 'object') {
+          const o = x as IOpenUser & { recordIds?: string[]; text?: string };
+          if (Array.isArray(o.recordIds)) return o.text || `${o.recordIds.length} 条关联记录`;
+          return o.name || o.email || o.id || '';
+        }
+        const id = String(x);
+        return byId?.get(id) ?? id;
+      })
       .filter(Boolean)
       .join('、');
   }
@@ -112,6 +119,9 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
   // 人员候选 / 选项候选：按字段分别解析（支持管理员配置的跨表来源 + 筛选条件）
   const [usersByField, setUsersByField] = useState<Map<string, IOpenUser[]>>(new Map());
   const [optionNamesByField, setOptionNamesByField] = useState<Map<string, string[]>>(new Map());
+  const [linkOptionsByField, setLinkOptionsByField] = useState<Map<string, LinkOption[]>>(
+    new Map(),
+  );
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [scanningUsers, setScanningUsers] = useState(false);
 
@@ -149,6 +159,16 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [result, setResult] = useState<{ success: number; errors: Array<{ index: number; message: string }> } | null>(null);
+
+  /** 需要解析候选记录的字段（关联字段，候选取关联表的记录） */
+  const linkEntries = useMemo(
+    () =>
+      configuredFields.flatMap((x) => {
+        if (![18, 21].includes(x.meta.type as number)) return [];
+        return [{ fieldId: x.meta.id, field: x.meta }];
+      }),
+    [configuredFields],
+  );
 
   /** 条件中被引用的「当前表单字段」：这些字段的值变化时需要重算候选 */
   const dynamicFieldIds = useMemo(() => {
@@ -202,6 +222,19 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
       setScanningUsers(false);
     }
   }, [table, peopleEntries, optionEntries, dynamic]);
+
+  // 关联表的记录不随录入行变化，单独读取一次
+  useEffect(() => {
+    let cancelled = false;
+    loadLinkCandidates(linkEntries)
+      .then((links) => {
+        if (!cancelled) setLinkOptionsByField(links);
+      })
+      .catch((e) => console.error('读取关联表记录失败', e));
+    return () => {
+      cancelled = true;
+    };
+  }, [linkEntries]);
 
   useEffect(() => {
     // 动态条件依赖当前录入行，做轻量防抖避免每次输入都全表扫描
@@ -427,6 +460,7 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
           onChange={onChange}
           users={usersByField.get(field.id) ?? []}
           optionNames={optionNamesByField.get(field.id)}
+          linkOptions={linkOptionsByField.get(field.id)}
           currentUserId={currentUserId}
           userById={userById}
           multipleUser={(field.property as { multiple?: boolean } | null)?.multiple !== false}
@@ -507,7 +541,8 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
             <Tag size="small" color="grey">{isWritableField(meta) ? '只读' : '不可填写'}</Tag>
             <span className="hint-text" style={{ flex: 1, textAlign: 'right' }}>
               {isWritableField(meta)
-                ? readonlyText(meta, fc?.fixedValue) || '（未设置固定值）'
+                ? readonlyText(meta, fc?.fixedValue, linkOptionsByField.get(meta.id)) ||
+                  '（未设置固定值）'
                 : '由多维表格自动生成'}
             </span>
           </div>

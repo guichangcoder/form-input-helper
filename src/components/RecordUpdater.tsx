@@ -16,7 +16,7 @@ import {
   toSingleSelectCell,
   type SelectOption,
 } from '../utils/options';
-import { collectUsersFromTable, getCurrentUserId } from '../utils/sdk';
+import { collectUsersFromTable, getCurrentUserId, loadLinkCandidates, type LinkOption } from '../utils/sdk';
 import {
   cellText,
   cellToRawValue,
@@ -72,6 +72,10 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
   const [users, setUsers] = useState<IOpenUser[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [scanningUsers, setScanningUsers] = useState(false);
+  /** 关联字段的候选记录（按字段解析） */
+  const [linkOptionsByField, setLinkOptionsByField] = useState<Map<string, LinkOption[]>>(
+    new Map(),
+  );
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
     users.forEach((u) => u.id && m.set(u.id, u));
@@ -79,20 +83,34 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
     return m;
   }, [users, currentUserId]);
 
+  /** 需要解析候选记录的字段（关联字段） */
+  const linkEntries = useMemo(
+    () =>
+      writableFields.flatMap((f) =>
+        [18, 21].includes(f.type as number) ? [{ fieldId: f.id, field: f }] : [],
+      ),
+    [writableFields],
+  );
+
   const loadUsers = useCallback(async () => {
     if (!table) return;
     setScanningUsers(true);
     try {
-      const [list, uid] = await Promise.all([collectUsersFromTable(table), getCurrentUserId()]);
+      const [list, uid, links] = await Promise.all([
+        collectUsersFromTable(table),
+        getCurrentUserId(),
+        loadLinkCandidates(linkEntries),
+      ]);
       setUsers(list);
       setCurrentUserId(uid);
+      setLinkOptionsByField(links);
     } catch (e) {
       console.error('读取人员字段失败', e);
       Toast.error(describeError(e, '读取人员字段失败，请刷新重试'));
     } finally {
       setScanningUsers(false);
     }
-  }, [table]);
+  }, [table, linkEntries]);
 
   useEffect(() => {
     loadUsers();
@@ -444,6 +462,7 @@ export default function RecordUpdater({ table, tableName, fields }: RecordUpdate
       value={value}
       onChange={onChange}
       users={users}
+      linkOptions={linkOptionsByField.get(field.id)}
       currentUserId={currentUserId}
       userById={userById}
       multipleUser={(field.property as { multiple?: boolean } | null)?.multiple !== false}

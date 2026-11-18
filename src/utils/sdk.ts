@@ -221,14 +221,14 @@ export async function collectOptionsFromTableField(
 async function forEachRecord(
   table: ITable,
   maxPages: number,
-  cb: (fields: Record<string, unknown>) => void,
+  cb: (fields: Record<string, unknown>, recordId: string) => void,
 ): Promise<void> {
   let pageToken: string | undefined;
   let pages = 0;
   while (pages < maxPages) {
     const res = await table.getRecords({ pageSize: 500, pageToken });
     for (const rec of res.records) {
-      cb(rec.fields as unknown as Record<string, unknown>);
+      cb(rec.fields as unknown as Record<string, unknown>, rec.recordId);
     }
     pages++;
     if (!res.hasMore || !res.pageToken) break;
@@ -415,6 +415,66 @@ export async function loadOptionCandidates(
         .map((o) => o.name)
         .filter((n) => refSet.has(n)),
     );
+  }
+  return result;
+}
+
+/** 关联字段候选项：id = 关联记录 ID，label = 主字段文本（已去重） */
+export interface LinkOption {
+  id: string;
+  label: string;
+}
+
+/**
+ * 读取关联表中的记录作为候选（label 取数据表第一个字段的文本）。
+ * 按「记录 ID」与「显示文本」双重去重：同一记录只出现一次，同名记录合并为一项（保留首个）。
+ */
+async function collectLinkOptions(tableId: string, maxPages = 10): Promise<LinkOption[]> {
+  const table = await bitable.base.getTable(tableId);
+  const metas = (await table.getFieldMetaList()) ?? [];
+  const primaryFieldId = metas[0]?.id;
+
+  const list: LinkOption[] = [];
+  const seenId = new Set<string>();
+  const seenLabel = new Set<string>();
+
+  await forEachRecord(table, maxPages, (fields, recordId) => {
+    if (!recordId || seenId.has(recordId)) return;
+    const label =
+      (primaryFieldId ? cellToTexts(fields[primaryFieldId]).join(' ') : '') || recordId;
+    if (seenLabel.has(label)) return;
+    seenId.add(recordId);
+    seenLabel.add(label);
+    list.push({ id: recordId, label });
+  });
+  return list;
+}
+
+/**
+ * 批量解析表单中各「关联」字段的候选记录（单向/双向关联）。
+ * 同一关联表只读取一次；读取失败的字段不出现在结果中。
+ * @returns Map<fieldId, LinkOption[]>
+ */
+export async function loadLinkCandidates(
+  entries: Array<{ fieldId: string; field: IFieldMeta }>,
+): Promise<Map<string, LinkOption[]>> {
+  const result = new Map<string, LinkOption[]>();
+  const cache = new Map<string, Promise<LinkOption[]>>();
+
+  for (const e of entries) {
+    const tableId = (e.field.property as { tableId?: string } | null)?.tableId;
+    if (!tableId) continue;
+    let p = cache.get(tableId);
+    if (!p) {
+      p = collectLinkOptions(tableId);
+      cache.set(tableId, p);
+    }
+    try {
+      result.set(e.fieldId, await p);
+    } catch (err) {
+      console.error('读取关联表记录失败', err);
+      result.set(e.fieldId, []);
+    }
   }
   return result;
 }

@@ -9,6 +9,8 @@ import {
   USER_FIELD_TYPES,
   collectUsersFromTable,
   getCurrentUserId,
+  loadLinkCandidates,
+  type LinkOption,
 } from '../utils/sdk';
 import {
   CONDITION_OPERATOR_LABEL,
@@ -353,23 +355,30 @@ export default function FormConfigPanel({
     [local.fields, visibleIdSet],
   );
 
-  // 人员库（只读字段选人时用）
+  // 人员库（只读字段选人时用） + 关联字段候选记录（只读字段选关联记录时用）
   const [users, setUsers] = useState<IOpenUser[]>([]);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [linkOptionsByField, setLinkOptionsByField] = useState<Map<string, LinkOption[]>>(
+    new Map(),
+  );
   useEffect(() => {
     if (!table) return;
     let cancelled = false;
-    Promise.all([collectUsersFromTable(table), getCurrentUserId()])
-      .then(([list, uid]) => {
+    const linkEntries = fields
+      .filter((f) => [18, 21].includes(f.type as number))
+      .map((f) => ({ fieldId: f.id, field: f }));
+    Promise.all([collectUsersFromTable(table), getCurrentUserId(), loadLinkCandidates(linkEntries)])
+      .then(([list, uid, links]) => {
         if (cancelled) return;
         setUsers(list);
         setCurrentUserId(uid);
+        setLinkOptionsByField(links);
       })
       .catch((e) => console.error('读取人员字段失败', e));
     return () => {
       cancelled = true;
     };
-  }, [table]);
+  }, [table, fields]);
 
   const userById = useMemo(() => {
     const m = new Map<string, IOpenUser>();
@@ -722,6 +731,7 @@ export default function FormConfigPanel({
                   value={fc.fixedValue}
                   onChange={(v) => patchField(fc.fieldId, { fixedValue: v })}
                   users={users}
+                  linkOptions={linkOptionsByField.get(meta.id)}
                   currentUserId={currentUserId}
                   userById={userById}
                   multipleUser={(meta.property as { multiple?: boolean } | null)?.multiple !== false}

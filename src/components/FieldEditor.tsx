@@ -2,6 +2,7 @@ import React from 'react';
 import { Checkbox, DatePicker, Input, InputNumber, Select, Tag } from '@douyinfe/semi-ui';
 import type { IFieldMeta, IOpenUser } from '@lark-base-open/js-sdk';
 import { findInvalidOptions, optionsFromMeta } from '../utils/options';
+import type { LinkOption } from '../utils/sdk';
 
 interface FieldEditorProps {
   field: IFieldMeta;
@@ -19,6 +20,8 @@ interface FieldEditorProps {
    * undefined = 使用字段自身选项；数组 = 只展示这些选项（可能为空）。
    */
   optionNames?: string[];
+  /** 关联字段的候选记录（已去重）；undefined/空数组 = 暂无可关联记录 */
+  linkOptions?: LinkOption[];
   placeholder?: string;
 }
 
@@ -32,6 +35,7 @@ export default function FieldEditor({
   userById,
   multipleUser = true,
   optionNames,
+  linkOptions,
   placeholder,
 }: FieldEditorProps) {
   const options = optionsFromMeta(field);
@@ -163,6 +167,17 @@ export default function FieldEditor({
           onChange={onChange}
         />
       );
+    case 18: // SingleLink（单向关联）
+    case 21: // DuplexLink（双向关联）
+      return (
+        <LinkEditor
+          value={value}
+          options={linkOptions}
+          multiple={(field.property as { multiple?: boolean } | null)?.multiple !== false}
+          placeholder={placeholder}
+          onChange={onChange}
+        />
+      );
     default: // Text / Phone / Url / Email
       return (
         <Input
@@ -172,6 +187,79 @@ export default function FieldEditor({
         />
       );
   }
+}
+
+/** 从关联字段的值中提取记录 ID（支持字符串、数组、关联单元格对象），并去重 */
+function linkIds(value: unknown): string[] {
+  if (Array.isArray(value)) return value.flatMap(linkIds);
+  if (value && typeof value === 'object') {
+    const o = value as { recordIds?: unknown; record_ids?: unknown; id?: unknown };
+    const nested = o.recordIds ?? o.record_ids;
+    if (Array.isArray(nested)) return nested.flatMap(linkIds);
+    if (typeof o.id === 'string') return [o.id];
+    return [];
+  }
+  const s = String(value ?? '').trim();
+  return s ? [s] : [];
+}
+
+interface LinkEditorProps {
+  value: unknown;
+  /** undefined = 尚未读取完成；空数组 = 关联表中没有记录 */
+  options?: LinkOption[];
+  multiple: boolean;
+  placeholder?: string;
+  onChange: (v: string[]) => void;
+}
+
+/** 关联字段编辑器：从关联表记录中选择（可搜索，已选值自动去重） */
+function LinkEditor({ value, options, multiple, placeholder, onChange }: LinkEditorProps) {
+  if (options === undefined) {
+    return <div className="hint-text">正在读取关联表记录…</div>;
+  }
+  if (!options.length) {
+    return <div className="hint-text">关联表中暂无可关联的记录，请先在关联表中添加记录。</div>;
+  }
+
+  const ids = [...new Set(linkIds(value))];
+  const byId = new Map(options.map((o) => [o.id, o.label]));
+
+  const emit = (v: unknown) => {
+    const arr = (Array.isArray(v) ? v : v ? [v] : []) as string[];
+    onChange([...new Set(arr.filter(Boolean))]);
+  };
+
+  return (
+    <div>
+      <Select
+        multiple={multiple}
+        value={multiple ? ids : ids[0]}
+        optionList={options.map((o) => ({ label: o.label, value: o.id }))}
+        placeholder={
+          placeholder || (multiple ? '选择关联记录（可搜索、可多选）' : '选择关联记录（可搜索）')
+        }
+        style={{ width: '100%' }}
+        filter
+        maxTagCount={3}
+        onChange={emit}
+      />
+      {multiple && ids.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          {ids.map((id) => (
+            <Tag
+              key={id}
+              closable
+              size="small"
+              onClose={() => onChange(ids.filter((x) => x !== id))}
+              style={{ marginRight: 4, marginBottom: 4 }}
+            >
+              {byId.get(id) ?? id}
+            </Tag>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 已选值不在数据表现有选项中时的提示（提示重选或清空，插件不会自动创建选项） */

@@ -16,10 +16,12 @@ export const IMPORTABLE_FIELD_TYPES: FieldType[] = [
   FieldType.Email,
 ];
 
-/** 固定值/录入模块可写入的字段类型（含人员：需从人员库选择，不可从 Excel 文本解析） */
+/** 固定值/录入模块可写入的字段类型（含人员：需从人员库选择；含关联：需从关联表记录中选择） */
 export const WRITABLE_FIELD_TYPES: FieldType[] = [
   ...IMPORTABLE_FIELD_TYPES,
   FieldType.User,
+  FieldType.SingleLink,
+  FieldType.DuplexLink,
 ];
 
 /** 不可用于筛选的字段类型：单元格值无法转换为可比较的文本/数字 */
