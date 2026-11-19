@@ -520,6 +520,25 @@ export default function FormConfigPanel({
       if (!meta) return;
       checkSource(meta, fc.peopleSource, '候选人员来源');
       checkSource(meta, fc.optionSource, '候选选项来源');
+
+      // 默认选项必须是本字段在数据表中已有的选项（插件不会新增选项）
+      const type = meta.type as number;
+      if (type !== 3 && type !== 4) return;
+      const names = new Set(optionsFromMeta(meta).map((o) => o.name));
+      const defaults =
+        type === 3
+          ? typeof fc.defaultValue === 'string' && fc.defaultValue
+            ? [fc.defaultValue]
+            : []
+          : Array.isArray(fc.defaultValue)
+            ? fc.defaultValue
+            : [];
+      const invalid = defaults.filter((n) => !names.has(n));
+      if (invalid.length) {
+        problems.push(
+          `字段「${meta.name}」的默认选项 ${invalid.map((n) => `「${n}」`).join('、')} 不存在于数据表，请重新选择`,
+        );
+      }
     });
     if (problems.length) {
       Toast.error(problems.join('；'));
@@ -760,6 +779,21 @@ export default function FormConfigPanel({
                     ? '已设置来源：候选人员仅取该来源字段中满足条件的人员（不合并本表人员）。'
                     : '未设置来源：候选人员为本表中已出现过的人员。'}
                 </div>
+                <div style={{ marginTop: 8 }}>
+                  <Checkbox
+                    checked={fc.defaultCurrentUser !== false}
+                    onChange={(e) =>
+                      patchField(fc.fieldId, {
+                        defaultCurrentUser: Boolean(e.target.checked),
+                      })
+                    }
+                  >
+                    默认预填当前登录用户
+                  </Checkbox>
+                  <span className="hint-text" style={{ marginLeft: 8 }}>
+                    姓名 · 当前用户（关闭则初始为空）
+                  </span>
+                </div>
               </>
             )}
 
@@ -783,6 +817,46 @@ export default function FormConfigPanel({
                   {fc.optionSource?.tableId
                     ? '已设置来源：候选选项仅展示「本字段已有选项」中出现在该来源里的值。'
                     : '未设置来源：候选选项为本字段在数据表中已有的全部选项。'}
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <div className="hint-text" style={{ marginBottom: 4 }}>
+                    默认选项（可选，预填到表单填写页）：
+                  </div>
+                  {(meta.type as number) === 4 ? (
+                    <Select
+                      multiple
+                      filter
+                      style={{ width: '100%' }}
+                      maxTagCount={3}
+                      placeholder="不预填"
+                      value={Array.isArray(fc.defaultValue) ? fc.defaultValue : []}
+                      optionList={optionsFromMeta(meta).map((o) => ({
+                        label: o.name,
+                        value: o.name,
+                      }))}
+                      onChange={(v) =>
+                        patchField(fc.fieldId, {
+                          defaultValue: (Array.isArray(v) ? v : []) as string[],
+                        })
+                      }
+                    />
+                  ) : (
+                    <Select
+                      filter
+                      style={{ width: '100%' }}
+                      placeholder="不预填"
+                      value={typeof fc.defaultValue === 'string' ? fc.defaultValue || undefined : undefined}
+                      optionList={optionsFromMeta(meta).map((o) => ({
+                        label: o.name,
+                        value: o.name,
+                      }))}
+                      onChange={(v) =>
+                        patchField(fc.fieldId, {
+                          defaultValue: typeof v === 'string' ? v : '',
+                        })
+                      }
+                    />
+                  )}
                 </div>
               </>
             )}

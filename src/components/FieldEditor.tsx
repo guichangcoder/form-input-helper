@@ -319,12 +319,18 @@ function PersonEditor({ value, options, userById, multiple, onChange }: PersonEd
     onChange(current.filter((u) => u.id !== id));
   };
 
+  // 预填的当前用户可能不在候选库中，补进下拉以保证能回显姓名
+  const extraOptions = current
+    .filter((u) => !options.some((o) => o.value === u.id))
+    .map((u) => ({ label: u.name || u.email || '当前用户', value: u.id! }));
+  const optionList = extraOptions.length ? [...options, ...extraOptions] : options;
+
   return (
     <div>
       <Select
         multiple={multiple}
         value={multiple ? ids : ids[0]}
-        optionList={options}
+        optionList={optionList}
         filter
         onChange={(v) => {
           const arr = (Array.isArray(v) ? v : v ? [v] : []) as string[];

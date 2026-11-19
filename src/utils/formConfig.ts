@@ -69,6 +69,16 @@ export interface FormFieldConfig {
    * 未配置：沿用本字段在数据表中已有的选项。
    */
   optionSource?: ValueSource;
+  /**
+   * 单选/多选字段的默认选项（预填到表单填写页）。
+   * 单选为选项名，多选为选项名数组；留空 = 不预填。
+   */
+  defaultValue?: string | string[];
+  /**
+   * 人员字段默认预填当前登录用户（默认开启）。
+   * 关闭后人员字段初始为空。
+   */
+  defaultCurrentUser?: boolean;
 }
 
 /** 一张数据表的表单配置 */

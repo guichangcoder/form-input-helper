@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Tag, Toast } from '@douyinfe/semi-ui';
 import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { convertCellValue } from '../utils/convert';
@@ -171,6 +171,74 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
     setDraft({});
   }, [config]);
 
+  /** 管理员配置的默认值：选项字段 = 默认选项；人员字段 = 当前登录用户 */
+  const defaultValues = useMemo(() => {
+    const out: Record<string, unknown> = {};
+    config.fields.forEach((fc) => {
+      const meta = fieldById.get(fc.fieldId);
+      if (!meta || !fc.visible || fc.readOnly) return;
+      const type = meta.type as number;
+      if (type === 11) {
+        if (fc.defaultCurrentUser === false || !currentUserId) return;
+        // 姓名来自候选人员库（本表或来源表中出现过）；拿不到时只带 open_id，界面显示为「当前用户」
+        out[fc.fieldId] = [userById.get(currentUserId) ?? { id: currentUserId }];
+        return;
+      }
+      if (type === 3 && typeof fc.defaultValue === 'string' && fc.defaultValue) {
+        out[fc.fieldId] = fc.defaultValue;
+        return;
+      }
+      if (type === 4 && Array.isArray(fc.defaultValue) && fc.defaultValue.length) {
+        out[fc.fieldId] = fc.defaultValue;
+      }
+    });
+    return out;
+  }, [config.fields, fieldById, currentUserId, userById]);
+
+  /** 默认值只预填一次，避免覆盖用户已经填写/修改的内容 */
+  const prefilledRef = useRef(false);
+  useEffect(() => {
+    prefilledRef.current = false;
+  }, [config, table]);
+
+  /** 配置中是否存在「默认预填当前用户」的人员字段（其默认值需等当前用户就绪） */
+  const hasUserDefault = useMemo(
+    () =>
+      config.fields.some((fc) => {
+        const meta = fieldById.get(fc.fieldId);
+        return Boolean(
+          meta &&
+            (meta.type as number) === 11 &&
+            fc.visible &&
+            !fc.readOnly &&
+            fc.defaultCurrentUser !== false,
+        );
+      }),
+    [config.fields, fieldById],
+  );
+
+  useEffect(() => {
+    if (prefilledRef.current) return;
+    const entries = Object.entries(defaultValues);
+    if (!entries.length) return;
+    setDraft((d) => {
+      let changed = false;
+      const next = { ...d };
+      entries.forEach(([id, v]) => {
+        const cur = next[id];
+        const empty =
+          cur === undefined || cur === null || cur === '' || (Array.isArray(cur) && !cur.length);
+        if (empty) {
+          next[id] = v;
+          changed = true;
+        }
+      });
+      return changed ? next : d;
+    });
+    // 人员默认值尚未就绪时先填其它默认值，等当前用户到达后再补一次
+    if (currentUserId || !hasUserDefault) prefilledRef.current = true;
+  }, [defaultValues, currentUserId, hasUserDefault, fieldById, draft]);
+
   const setValue = useCallback((fieldId: string, v: unknown) => {
     setDraft((d) => ({ ...d, [fieldId]: v }));
   }, []);
@@ -224,6 +292,8 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
       const res = await writeRecords(table, [values], fieldIds);
       if (res.success > 0) {
         setSubmitted((n) => n + 1);
+        // 清空后重新应用管理员配置的默认值，方便连续录入
+        prefilledRef.current = false;
         setDraft({});
         Toast.success(`已提交 1 条记录到「${tableName}」`);
       } else {
