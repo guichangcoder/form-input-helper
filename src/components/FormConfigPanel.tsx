@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Input, Select, Switch, Tag, TextArea, Toast } from '@douyinfe/semi-ui';
+import { Button, Checkbox, DatePicker, Input, Select, Switch, Tag, TextArea, Toast } from '@douyinfe/semi-ui';
 import { bitable, type IFieldMeta, type IOpenUser, type ITable } from '@lark-base-open/js-sdk';
 import { FIELD_TYPE_LABEL } from '../constants';
 import { describeError } from '../utils/errors';
@@ -859,6 +859,50 @@ export default function FormConfigPanel({
                   )}
                 </div>
               </>
+            )}
+
+            {writable && fc.visible && (meta.type as number) === 5 && (
+              <div style={{ marginTop: 8 }}>
+                <div className="hint-text" style={{ marginBottom: 4 }}>
+                  默认日期（可选，预填到表单填写页）：
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <Select
+                    style={{ minWidth: 130 }}
+                    value={
+                      fc.defaultDate === 'today'
+                        ? 'today'
+                        : typeof fc.defaultDate === 'number'
+                          ? 'fixed'
+                          : 'none'
+                    }
+                    optionList={[
+                      { label: '不预填', value: 'none' },
+                      { label: '今天', value: 'today' },
+                      { label: '指定日期', value: 'fixed' },
+                    ]}
+                    onChange={(v) => {
+                      if (v === 'today') patchField(fc.fieldId, { defaultDate: 'today' });
+                      else if (v === 'fixed') patchField(fc.fieldId, { defaultDate: Date.now() });
+                      else patchField(fc.fieldId, { defaultDate: undefined });
+                    }}
+                  />
+                  {typeof fc.defaultDate === 'number' && (
+                    <DatePicker
+                      style={{ minWidth: 160, flex: 1 }}
+                      format="yyyy-MM-dd"
+                      value={fc.defaultDate}
+                      placeholder="选择日期"
+                      onChange={(v) => {
+                        const d = Array.isArray(v) ? v[0] : v;
+                        if (d instanceof Date && !Number.isNaN(d.getTime())) {
+                          patchField(fc.fieldId, { defaultDate: d.getTime() });
+                        }
+                      }}
+                    />
+                  )}
+                </div>
+              </div>
             )}
           </div>
         );

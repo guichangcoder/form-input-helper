@@ -75,6 +75,11 @@ export interface FormFieldConfig {
    */
   defaultValue?: string | string[];
   /**
+   * 日期字段的默认值（预填到表单填写页）。
+   * 'today' = 打开表单当天的日期（本地零点）；数字 = 指定日期的毫秒时间戳；留空 = 不预填。
+   */
+  defaultDate?: 'today' | number;
+  /**
    * 人员字段默认预填当前登录用户（默认开启）。
    * 关闭后人员字段初始为空。
    */

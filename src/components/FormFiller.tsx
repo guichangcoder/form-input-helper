@@ -190,6 +190,17 @@ export default function FormFiller({ table, tableName, fields, config }: FormFil
       }
       if (type === 4 && Array.isArray(fc.defaultValue) && fc.defaultValue.length) {
         out[fc.fieldId] = fc.defaultValue;
+        return;
+      }
+      if (type === 5) {
+        if (fc.defaultDate === 'today') {
+          // 当天日期（本地零点），每次打开表单都取当天
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          out[fc.fieldId] = d.getTime();
+        } else if (typeof fc.defaultDate === 'number') {
+          out[fc.fieldId] = fc.defaultDate;
+        }
       }
     });
     return out;
