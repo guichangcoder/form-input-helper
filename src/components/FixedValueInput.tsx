@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button, Progress, Select, Tag, Toast } from '@douyinfe/semi-ui';
 import type { IFieldMeta, IOpenUser, ITable } from '@lark-base-open/js-sdk';
 import { BATCH_SIZE, FIELD_TYPE_LABEL } from '../constants';
@@ -203,6 +203,82 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
     [dynamicKey],
   );
 
+  /** 管理员配置的默认值：选项=默认选项、日期=默认日期、人员=当前登录用户 */
+  const defaultValues = useMemo(() => {
+    const out: Record<string, unknown> = {};
+    configuredFields.forEach(({ meta, fc }) => {
+      if (!fc || !fc.visible || fc.readOnly || isLockedField(fc, meta)) return;
+      const type = meta.type as number;
+      if (type === 11) {
+        if (fc.defaultCurrentUser === false || !currentUserId) return;
+        // 姓名来自候选人员库；拿不到时只带 open_id，界面显示为「当前用户」
+        out[meta.id] = [userById.get(currentUserId) ?? { id: currentUserId }];
+        return;
+      }
+      if (type === 3 && typeof fc.defaultValue === 'string' && fc.defaultValue) {
+        out[meta.id] = fc.defaultValue;
+        return;
+      }
+      if (type === 4 && Array.isArray(fc.defaultValue) && fc.defaultValue.length) {
+        out[meta.id] = fc.defaultValue;
+        return;
+      }
+      if (type === 5) {
+        if (fc.defaultDate === 'today') {
+          const d = new Date();
+          d.setHours(0, 0, 0, 0);
+          out[meta.id] = d.getTime();
+        } else if (typeof fc.defaultDate === 'number') {
+          out[meta.id] = fc.defaultDate;
+        }
+      }
+    });
+    return out;
+  }, [configuredFields, currentUserId, userById]);
+
+  /** 配置中是否存在「默认预填当前用户」的人员字段（其默认值需等当前用户就绪） */
+  const hasUserDefault = useMemo(
+    () =>
+      configuredFields.some(
+        ({ meta, fc }) =>
+          Boolean(
+            fc &&
+              !isLockedField(fc, meta) &&
+              (meta.type as number) === 11 &&
+              fc.defaultCurrentUser !== false,
+          ),
+      ),
+    [configuredFields],
+  );
+
+  /** 默认值只预填一次，不覆盖用户已填内容；加行/写入后清空草稿会重新预填 */
+  const prefilledRef = useRef(false);
+  useEffect(() => {
+    prefilledRef.current = false;
+  }, [config]);
+
+  useEffect(() => {
+    if (prefilledRef.current) return;
+    const entries = Object.entries(defaultValues);
+    if (!entries.length) return;
+    setDraft((d) => {
+      let changed = false;
+      const next = { ...d };
+      entries.forEach(([id, v]) => {
+        const cur = next[id];
+        const empty =
+          cur === undefined || cur === null || cur === '' || (Array.isArray(cur) && !cur.length);
+        if (empty) {
+          next[id] = v;
+          changed = true;
+        }
+      });
+      return changed ? next : d;
+    });
+    // 人员默认值尚未就绪时先填其它默认值，等当前用户到达后再补一次
+    if (currentUserId || !hasUserDefault) prefilledRef.current = true;
+  }, [defaultValues, currentUserId, hasUserDefault, draft]);
+
   const loadUsers = useCallback(async () => {
     if (!table) return;
     setScanningUsers(true);
@@ -388,6 +464,8 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
       .map((f) => `${f.name}: ${formatValue(f, values[f.id])}`);
     setRows((arr) => [...arr, { key: keySeq, values, display: parts.join(' | ') }]);
     setKeySeq((k) => k + 1);
+    // 清空后重新应用默认值，方便连续录入下一行
+    prefilledRef.current = false;
     setDraft({});
   };
 
@@ -431,6 +509,8 @@ export default function FixedValueInput({ table, tableName, fields, config }: Fi
       Toast.success(`写入完成：成功 ${res.success} 条${res.errors.length ? `，失败 ${res.errors.length} 条` : ''}`);
       if (res.errors.length === 0) {
         setRows([]);
+        // 清空后重新应用默认值，方便继续录入
+        prefilledRef.current = false;
         setDraft({});
       }
     } catch (err) {
